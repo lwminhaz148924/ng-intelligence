@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -565,7 +565,11 @@ function SettingsPanel({
 
 function TypingIndicator() {
   return (
-    <div className="msg assistant typingmsg">
+    <div
+      className="msg assistant typingmsg"
+      role="status"
+      aria-label="NG INTELLIGENCE is responding"
+    >
       <div className="avatar ai-avatar">
         N
       </div>
@@ -633,6 +637,7 @@ function MessageBubble({
 function App() {
   const [user, setUser] =
     useState(null)
+  const messagesEndRef = useRef(null)
 
   const [side, setSide] =
     useState(true)
@@ -654,6 +659,15 @@ function App() {
 
   const [admin, setAdmin] =
     useState(false)
+
+  useEffect(() => {
+    if (msgs.length > 0 || busy) {
+      messagesEndRef.current?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'end'
+      })
+    }
+  }, [msgs.length, busy])
 
   useEffect(() => {
     if (token()) {
@@ -905,7 +919,7 @@ function App() {
                 {msgs.map(
                   (m, i) => (
                     <MessageBubble
-                      key={i}
+                      key={`${i}-${m.role}-${m.content.slice(0, 24)}`}
                       message={m}
                       index={i}
                     />
@@ -915,6 +929,12 @@ function App() {
                 {busy && (
                   <TypingIndicator />
                 )}
+
+                <div
+                  ref={messagesEndRef}
+                  className="messages-end"
+                  aria-hidden="true"
+                />
 
               </div>
             )}
@@ -932,6 +952,15 @@ function App() {
                   e.target.value
                 )
               }
+              onInput={e => {
+                e.currentTarget.style.height =
+                  '45px'
+                e.currentTarget.style.height =
+                  `${Math.min(
+                    e.currentTarget.scrollHeight,
+                    150
+                  )}px`
+              }}
               onKeyDown={e => {
                 if (
                   e.key === 'Enter' &&
