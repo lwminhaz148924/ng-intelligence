@@ -5,7 +5,7 @@ import remarkGfm from 'remark-gfm'
 import {Send,Plus,LogOut,Menu,X,Shield,KeyRound,Sparkles,MessageSquare,Settings,Files,BarChart3,Trash2,ChevronRight} from 'lucide-react'
 import './styles.css'
 
-const API = import.meta.env.VITE_API_URL || 'https://ng-intelligence-2.onrender.com';
+const API = import.meta.env.VITE_API_URL || 'https://ng-intelligence.onrender.com';
 const token=()=>localStorage.getItem('ng_token')
 async function api(path,opt={}){const headers={'Content-Type':'application/json',...(opt.headers||{})};if(token())headers.Authorization='Bearer '+token()
 const r=await fetch(API+path,{...opt,headers});const d=await r.json().catch(()=>({}));if(!r.ok)throw Error(d.detail||'Request failed');return d}
