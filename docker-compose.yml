@@ -1,0 +1,22 @@
+services:
+  backend:
+    build: ./backend
+    env_file: ./backend/.env
+    ports:
+      - "8000:8000"
+    volumes:
+      - ng_data:/app/data
+      - ng_workspace:/app/workspace
+
+  frontend:
+    build: ./frontend
+    depends_on:
+      - backend
+    ports:
+      - "5173:80"
+    environment:
+      - VITE_API_URL=http://localhost:8000
+
+volumes:
+  ng_data:
+  ng_workspace:
