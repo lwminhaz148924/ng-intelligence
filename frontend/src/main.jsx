@@ -940,7 +940,8 @@ function App() {
           {/* COMPOSER - HIDE WHILE AI IS RESPONDING */}
 
           {!busy && (
-            <div className="composer">
+            <div className="composer"> 
+              </main>
 
               <textarea
                 value={input}
