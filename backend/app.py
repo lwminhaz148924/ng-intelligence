@@ -4,8 +4,6 @@ import re
 import sqlite3
 import hashlib
 import secrets
-import json
-import time
 import base64
 import smtplib
 
@@ -18,6 +16,7 @@ import requests
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Depends, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, EmailStr
 from jose import jwt, JWTError
 from passlib.context import CryptContext
@@ -27,6 +26,10 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
+
+# =========================================================
+# CONFIGURATION
+# =========================================================
 
 BASE = Path(__file__).resolve().parent
 load_dotenv(BASE / ".env")
@@ -64,14 +67,18 @@ def encryption():
 
 FERNET = encryption()
 
-app = FastAPI(title="NG INTELLIGENCE", version="2.1.0")
+app = FastAPI(title="NG INTELLIGENCE", version="2.2.0")
 
 app.state.limiter = limiter
 
-app.add_exception_handler(
-    RateLimitExceeded,
-    lambda request, exc: HTTPException(429, "Too many requests.")
-)
+
+@app.exception_handler(RateLimitExceeded)
+async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
+    return JSONResponse(
+        status_code=429,
+        content={"detail": "Too many requests. Please try again later."}
+    )
+
 
 app.add_middleware(SlowAPIMiddleware)
 
@@ -80,7 +87,8 @@ app.add_middleware(
     allow_origins=[
         x.strip()
         for x in os.getenv(
-            "CORS_ORIGINS", "http://localhost:5173"
+            "CORS_ORIGINS",
+            "http://localhost:5173"
         ).split(",")
         if x.strip()
     ],
@@ -90,8 +98,12 @@ app.add_middleware(
 )
 
 
+# =========================================================
+# DATABASE
+# =========================================================
+
 def conn():
-    c = sqlite3.connect(DB)
+    c = sqlite3.connect(DB, timeout=30)
     c.row_factory = sqlite3.Row
     return c
 
@@ -198,7 +210,6 @@ def init():
     );
     """)
 
-    # Existing users remain verified.
     columns = [
         row["name"]
         for row in c.execute("PRAGMA table_info(users)").fetchall()
@@ -210,20 +221,23 @@ def init():
         )
 
     if ADMIN_EMAIL and ADMIN_PASSWORD:
-        u = c.execute(
+        admin_email = ADMIN_EMAIL.lower().strip()
+
+        existing_admin = c.execute(
             "SELECT id FROM users WHERE email=?",
-            (ADMIN_EMAIL.lower().strip(),)
+            (admin_email,)
         ).fetchone()
 
-        if not u:
+        if not existing_admin:
             c.execute(
                 """
                 INSERT INTO users(
-                    email,password_hash,role,created_at,is_verified
-                ) VALUES(?,?,?,?,1)
+                    email, password_hash, role, created_at, is_verified
+                )
+                VALUES(?,?,?,?,1)
                 """,
                 (
-                    ADMIN_EMAIL.lower().strip(),
+                    admin_email,
                     pwd.hash(ADMIN_PASSWORD),
                     "admin",
                     now()
@@ -242,9 +256,12 @@ def init():
     c.close()
 
 
-
 init()
 
+
+# =========================================================
+# REQUEST MODELS
+# =========================================================
 
 class Auth(BaseModel):
     email: EmailStr
@@ -284,12 +301,16 @@ class FileReq(BaseModel):
     content: Optional[str] = None
 
 
+# =========================================================
+# AUTHENTICATION
+# =========================================================
+
 def token(u):
     return jwt.encode(
         {
             "sub": str(u["id"]),
             "role": u["role"],
-            "exp": datetime.utcnow() + timedelta(days=7)
+            "exp": datetime.utcnow() + timedelta(days=30)
         },
         JWT_SECRET,
         algorithm="HS256"
@@ -301,7 +322,7 @@ def current(authorization: str = Header("")):
         raise HTTPException(401, "Authentication required")
 
     try:
-        p = jwt.decode(
+        payload = jwt.decode(
             authorization[7:],
             JWT_SECRET,
             algorithms=["HS256"]
@@ -310,7 +331,7 @@ def current(authorization: str = Header("")):
         c = conn()
         u = c.execute(
             "SELECT * FROM users WHERE id=? AND active=1",
-            (int(p["sub"]),)
+            (int(payload["sub"]),)
         ).fetchone()
         c.close()
 
@@ -319,7 +340,7 @@ def current(authorization: str = Header("")):
 
         return u
 
-    except (JWTError, ValueError):
+    except (JWTError, ValueError, TypeError):
         raise HTTPException(401, "Invalid or expired session")
 
 
@@ -336,17 +357,25 @@ def log(user_id, event, status, details=""):
         INSERT INTO logs(user_id,event,status,details,created_at)
         VALUES(?,?,?,?,?)
         """,
-        (user_id, event, status, details[:2000], now())
+        (user_id, event, status, str(details)[:2000], now())
     )
     c.commit()
     c.close()
 
 
+# =========================================================
+# EMAIL VERIFICATION
+# =========================================================
+
 def send_verification_email(to_email, code):
     smtp_email = os.getenv("SMTP_EMAIL", "").strip()
     smtp_password = os.getenv("SMTP_PASSWORD", "").strip()
     smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com").strip()
-    smtp_port = int(os.getenv("SMTP_PORT", "587"))
+
+    try:
+        smtp_port = int(os.getenv("SMTP_PORT", "587"))
+    except ValueError:
+        raise HTTPException(503, "Invalid SMTP port configuration.")
 
     if not smtp_email or not smtp_password:
         raise HTTPException(
@@ -360,8 +389,7 @@ def send_verification_email(to_email, code):
     message["To"] = to_email
 
     message.set_content(
-        f"""
-Welcome to NG INTELLIGENCE!
+        f"""Welcome to NG INTELLIGENCE!
 
 Your email verification code is:
 
@@ -381,32 +409,36 @@ Created by Lw Minhaz
             server.login(smtp_email, smtp_password)
             server.send_message(message)
 
-   except Exception as e:
-    print(
-        f"[SMTP ERROR] {type(e).__name__}: {e}",
-        flush=True
-    )
-    raise HTTPException(
-        503,
-        "Unable to send verification email. Please try again later."
-    )
+    except Exception as e:
+        print(
+            f"[SMTP ERROR] {type(e).__name__}: {e}",
+            flush=True
+        )
+        raise HTTPException(
+            503,
+            "Unable to send verification email. Please try again later."
+        )
 
 
 def create_verification_code(email):
     code = f"{secrets.randbelow(1000000):06d}"
     code_hash = hashlib.sha256(code.encode()).hexdigest()
-    expires = (datetime.utcnow() + timedelta(minutes=10)).isoformat()
+    expires = (
+        datetime.utcnow() + timedelta(minutes=10)
+    ).isoformat()
 
     c = conn()
     c.execute(
         """
-        INSERT INTO verification_codes(email,code_hash,expires_at,attempts,created_at)
+        INSERT INTO verification_codes(
+            email,code_hash,expires_at,attempts,created_at
+        )
         VALUES(?,?,?,?,?)
         ON CONFLICT(email) DO UPDATE SET
-        code_hash=excluded.code_hash,
-        expires_at=excluded.expires_at,
-        attempts=0,
-        created_at=excluded.created_at
+            code_hash=excluded.code_hash,
+            expires_at=excluded.expires_at,
+            attempts=0,
+            created_at=excluded.created_at
         """,
         (email, code_hash, expires, 0, now())
     )
@@ -415,6 +447,10 @@ def create_verification_code(email):
 
     return code
 
+
+# =========================================================
+# WORKSPACE HELPERS
+# =========================================================
 
 def safe_path(rel):
     rel = rel.strip().replace("\\", "/")
@@ -447,6 +483,10 @@ def get_setting(name, fallback=""):
 
     return r["value"] if r else fallback
 
+
+# =========================================================
+# GEMINI API
+# =========================================================
 
 def keys():
     env = os.getenv("GEMINI_API_KEY", "").strip()
@@ -486,7 +526,7 @@ def gemini(prompt):
     for label, key in active:
         try:
             url = (
-                f"https://generativelanguage.googleapis.com/"
+                "https://generativelanguage.googleapis.com/"
                 f"v1beta/models/{model}:generateContent"
             )
 
@@ -519,26 +559,26 @@ def gemini(prompt):
             )
 
             if r.ok:
-                d = r.json()
+                data = r.json()
                 parts = (
-                    d.get("candidates", [{}])[0]
+                    data.get("candidates", [{}])[0]
                     .get("content", {})
                     .get("parts", [])
                 )
 
-                ans = "\n".join(
+                answer = "\n".join(
                     x.get("text", "")
                     for x in parts
                     if x.get("text")
                 ).strip()
 
-                if ans:
-                    return ans, model, label
+                if answer:
+                    return answer, model, label
 
             last = f"{label}: HTTP {r.status_code}"
 
         except Exception as e:
-            last = f"{label}: {e}"
+            last = f"{label}: {type(e).__name__}"
 
     raise HTTPException(
         502,
@@ -548,14 +588,18 @@ def gemini(prompt):
 
 def extract_files(answer):
     return [
-        {"path": p, "content": content.strip()}
-        for p, content in re.findall(
+        {"path": path, "content": content.strip()}
+        for path, content in re.findall(
             r'<FILE\s+path=["\']([^"\']+)["\']\s*>(.*?)</FILE>',
             answer,
             re.I | re.S
         )
     ]
 
+
+# =========================================================
+# HEALTH
+# =========================================================
 
 @app.get("/api/health")
 def health():
@@ -567,50 +611,49 @@ def health():
     }
 
 
-# REGISTER: Create an unverified account and send OTP.
+# =========================================================
+# REGISTER
+# =========================================================
+
 @app.post("/api/auth/register")
 @limiter.limit("5/minute")
 def register(request: Request, a: Auth):
     email = a.email.lower().strip()
 
     if len(a.password) < 8:
-        raise HTTPException(400, "Password must be at least 8 characters.")
-
-    c = conn()
-
-    existing = c.execute(
-        "SELECT id FROM users WHERE email=?",
-        (email,)
-    ).fetchone()
-
-    if existing:
-        c.close()
-        raise HTTPException(409, "Account already exists.")
-
-    c.close()
-
-    code = f"{secrets.randbelow(1000000):06d}"
-
-    # Send email before creating the account.
-    send_verification_email(email, code)
+        raise HTTPException(
+            400,
+            "Password must be at least 8 characters."
+        )
 
     c = conn()
 
     try:
-        with smtplib.SMTP(smtp_host, smtp_port, timeout=20) as server:
-            server.starttls()
-            server.login(smtp_email, smtp_password)
-            server.send_message(message)
+        existing = c.execute(
+            "SELECT id FROM users WHERE email=?",
+            (email,)
+        ).fetchone()
 
-    except Exception as e:
-        print(
-            f"[SMTP ERROR] {type(e).__name__}: {e}",
-            flush=True
+        if existing:
+            raise HTTPException(409, "Account already exists.")
+
+        c.execute(
+            """
+            INSERT INTO users(
+                email,password_hash,role,created_at,is_verified
+            )
+            VALUES(?,?,?,?,0)
+            """,
+            (
+                email,
+                pwd.hash(a.password),
+                "user",
+                now()
+            )
         )
-        raise HTTPException(
-            503,
-            "Unable to send verification email. Please try again later."
-        )
+
+        c.commit()
+
     except sqlite3.IntegrityError:
         c.rollback()
         raise HTTPException(409, "Account already exists.")
@@ -618,8 +661,49 @@ def register(request: Request, a: Auth):
     finally:
         c.close()
 
+    try:
+        code = create_verification_code(email)
+        send_verification_email(email, code)
 
-# VERIFY: Check the email OTP.
+    except HTTPException:
+        cleanup = conn()
+        cleanup.execute(
+            "DELETE FROM verification_codes WHERE email=?",
+            (email,)
+        )
+        cleanup.execute(
+            "DELETE FROM users WHERE email=? AND is_verified=0",
+            (email,)
+        )
+        cleanup.commit()
+        cleanup.close()
+        raise
+
+    except Exception:
+        cleanup = conn()
+        cleanup.execute(
+            "DELETE FROM verification_codes WHERE email=?",
+            (email,)
+        )
+        cleanup.execute(
+            "DELETE FROM users WHERE email=? AND is_verified=0",
+            (email,)
+        )
+        cleanup.commit()
+        cleanup.close()
+        raise HTTPException(503, "Registration could not be completed.")
+
+    return {
+        "verification_required": True,
+        "email": email,
+        "message": "Verification code sent to your email."
+    }
+
+
+# =========================================================
+# VERIFY EMAIL
+# =========================================================
+
 @app.post("/api/auth/verify")
 @limiter.limit("10/minute")
 def verify_email(request: Request, req: VerifyReq):
@@ -627,69 +711,85 @@ def verify_email(request: Request, req: VerifyReq):
     code = req.code.strip()
 
     if not re.fullmatch(r"\d{6}", code):
-        raise HTTPException(400, "Enter a valid 6-digit verification code.")
+        raise HTTPException(
+            400,
+            "Enter a valid 6-digit verification code."
+        )
 
     c = conn()
 
-    user = c.execute(
-        "SELECT * FROM users WHERE email=?",
-        (email,)
-    ).fetchone()
+    try:
+        user = c.execute(
+            "SELECT * FROM users WHERE email=?",
+            (email,)
+        ).fetchone()
 
-    if not user:
-        c.close()
-        raise HTTPException(404, "Account not found.")
+        if not user:
+            raise HTTPException(404, "Account not found.")
 
-    if user["is_verified"]:
-        c.close()
-        raise HTTPException(400, "Email is already verified.")
+        if user["is_verified"]:
+            raise HTTPException(400, "Email is already verified.")
 
-    record = c.execute(
-        "SELECT * FROM verification_codes WHERE email=?",
-        (email,)
-    ).fetchone()
+        record = c.execute(
+            "SELECT * FROM verification_codes WHERE email=?",
+            (email,)
+        ).fetchone()
 
-    if not record:
-        c.close()
-        raise HTTPException(400, "Verification code not found. Request a new code.")
+        if not record:
+            raise HTTPException(
+                400,
+                "Verification code not found. Request a new code."
+            )
 
-    if record["attempts"] >= 5:
-        c.close()
-        raise HTTPException(429, "Too many incorrect attempts. Request a new code.")
+        if record["attempts"] >= 5:
+            raise HTTPException(
+                429,
+                "Too many incorrect attempts. Request a new code."
+            )
 
-    if datetime.utcnow() > datetime.fromisoformat(record["expires_at"]):
-        c.close()
-        raise HTTPException(400, "Verification code expired. Request a new code.")
+        if datetime.utcnow() > datetime.fromisoformat(record["expires_at"]):
+            raise HTTPException(
+                400,
+                "Verification code expired. Request a new code."
+            )
 
-    supplied_hash = hashlib.sha256(code.encode()).hexdigest()
+        supplied_hash = hashlib.sha256(code.encode()).hexdigest()
 
-    if not secrets.compare_digest(supplied_hash, record["code_hash"]):
+        if not secrets.compare_digest(
+            supplied_hash,
+            record["code_hash"]
+        ):
+            c.execute(
+                """
+                UPDATE verification_codes
+                SET attempts=attempts+1
+                WHERE email=?
+                """,
+                (email,)
+            )
+            c.commit()
+
+            raise HTTPException(400, "Incorrect verification code.")
+
         c.execute(
-            "UPDATE verification_codes SET attempts=attempts+1 WHERE email=?",
+            "UPDATE users SET is_verified=1 WHERE email=?",
             (email,)
         )
+
+        c.execute(
+            "DELETE FROM verification_codes WHERE email=?",
+            (email,)
+        )
+
         c.commit()
+
+        verified_user = c.execute(
+            "SELECT * FROM users WHERE email=?",
+            (email,)
+        ).fetchone()
+
+    finally:
         c.close()
-        raise HTTPException(400, "Incorrect verification code.")
-
-    c.execute(
-        "UPDATE users SET is_verified=1 WHERE email=?",
-        (email,)
-    )
-
-    c.execute(
-        "DELETE FROM verification_codes WHERE email=?",
-        (email,)
-    )
-
-    c.commit()
-
-    verified_user = c.execute(
-        "SELECT * FROM users WHERE email=?",
-        (email,)
-    ).fetchone()
-
-    c.close()
 
     return {
         "token": token(verified_user),
@@ -702,19 +802,20 @@ def verify_email(request: Request, req: VerifyReq):
     }
 
 
-# RESEND: Send another OTP.
+# =========================================================
+# RESEND VERIFICATION
+# =========================================================
+
 @app.post("/api/auth/resend-verification")
 @limiter.limit("3/minute")
 def resend_verification(request: Request, req: EmailOnly):
     email = req.email.lower().strip()
 
     c = conn()
-
     user = c.execute(
         "SELECT * FROM users WHERE email=?",
         (email,)
     ).fetchone()
-
     c.close()
 
     if not user:
@@ -728,19 +829,22 @@ def resend_verification(request: Request, req: EmailOnly):
     send_verification_email(email, code)
 
     code_hash = hashlib.sha256(code.encode()).hexdigest()
-    expires = (datetime.utcnow() + timedelta(minutes=10)).isoformat()
+    expires = (
+        datetime.utcnow() + timedelta(minutes=10)
+    ).isoformat()
 
     c = conn()
     c.execute(
         """
         INSERT INTO verification_codes(
             email,code_hash,expires_at,attempts,created_at
-        ) VALUES(?,?,?,?,?)
+        )
+        VALUES(?,?,?,?,?)
         ON CONFLICT(email) DO UPDATE SET
-        code_hash=excluded.code_hash,
-        expires_at=excluded.expires_at,
-        attempts=0,
-        created_at=excluded.created_at
+            code_hash=excluded.code_hash,
+            expires_at=excluded.expires_at,
+            attempts=0,
+            created_at=excluded.created_at
         """,
         (email, code_hash, expires, 0, now())
     )
@@ -752,6 +856,10 @@ def resend_verification(request: Request, req: EmailOnly):
         "message": "A new verification code has been sent."
     }
 
+
+# =========================================================
+# LOGIN
+# =========================================================
 
 @app.post("/api/auth/login")
 @limiter.limit("10/minute")
@@ -767,6 +875,9 @@ def login(request: Request, a: Auth):
 
     if not u or not pwd.verify(a.password, u["password_hash"]):
         raise HTTPException(401, "Invalid email or password.")
+
+    if not u["active"]:
+        raise HTTPException(403, "Account is disabled.")
 
     if not u["is_verified"]:
         raise HTTPException(
@@ -784,6 +895,10 @@ def login(request: Request, a: Auth):
     }
 
 
+# =========================================================
+# CURRENT USER
+# =========================================================
+
 @app.get("/api/me")
 def me(u=Depends(current)):
     return {
@@ -793,6 +908,10 @@ def me(u=Depends(current)):
     }
 
 
+# =========================================================
+# CHAT HISTORY
+# =========================================================
+
 @app.get("/api/chats")
 def list_chats(u=Depends(current)):
     c = conn()
@@ -800,7 +919,8 @@ def list_chats(u=Depends(current)):
     rows = c.execute(
         """
         SELECT id,title,created_at,updated_at
-        FROM chats WHERE user_id=?
+        FROM chats
+        WHERE user_id=?
         ORDER BY updated_at DESC
         """,
         (u["id"],)
@@ -826,7 +946,8 @@ def history(chat_id: int, u=Depends(current)):
     rows = c.execute(
         """
         SELECT role,content,created_at
-        FROM messages WHERE chat_id=?
+        FROM messages
+        WHERE chat_id=?
         ORDER BY id
         """,
         (chat_id,)
@@ -857,6 +978,10 @@ def delete_chat(chat_id: int, u=Depends(current)):
 
     return {"ok": True}
 
+
+# =========================================================
+# AI CHAT
+# =========================================================
 
 @app.post("/api/chat")
 @limiter.limit("30/minute")
@@ -917,7 +1042,7 @@ def chat(request: Request, req: ChatReq, u=Depends(current)):
         )
 
     except HTTPException as e:
-        log(u["id"], "chat", "error", str(e))
+        log(u["id"], "chat", "error", str(e.detail))
         raise
 
     c = conn()
@@ -939,7 +1064,8 @@ def chat(request: Request, req: ChatReq, u=Depends(current)):
         """
         INSERT INTO usage(
             user_id,model,input_chars,output_chars,created_at
-        ) VALUES(?,?,?,?,?)
+        )
+        VALUES(?,?,?,?,?)
         """,
         (u["id"], model, len(text), len(answer), now())
     )
@@ -961,6 +1087,10 @@ def chat(request: Request, req: ChatReq, u=Depends(current)):
         "model": model
     }
 
+
+# =========================================================
+# WORKSPACE
+# =========================================================
 
 @app.get("/api/workspace/files")
 def files(u=Depends(current)):
@@ -985,7 +1115,10 @@ def read_file(path: str, u=Depends(current)):
 
     return {
         "path": path,
-        "content": p.read_text(encoding="utf-8", errors="replace")
+        "content": p.read_text(
+            encoding="utf-8",
+            errors="replace"
+        )
     }
 
 
@@ -1000,6 +1133,10 @@ def write_file(req: FileReq, u=Depends(current)):
 
     return {"ok": True, "path": req.path}
 
+
+# =========================================================
+# PROJECTS
+# =========================================================
 
 @app.post("/api/projects")
 def project(req: ProjectReq, u=Depends(current)):
@@ -1019,44 +1156,72 @@ def project(req: ProjectReq, u=Depends(current)):
 @app.post("/api/auto-fix")
 def auto_fix(req: FileReq, u=Depends(current)):
     if not req.path or not req.content:
-        raise HTTPException(400, "File path and source are required.")
+        raise HTTPException(
+            400,
+            "File path and source are required."
+        )
 
     return {
-        "message": "Use /api/chat with the full error and source context for the AI fix workflow."
+        "message": (
+            "Use /api/chat with the full error and source context "
+            "for the AI fix workflow."
+        )
     }
 
+
+# =========================================================
+# ADMIN STATS
+# =========================================================
 
 @app.get("/api/admin/stats")
 def admin_stats(u=Depends(admin)):
     c = conn()
 
-    users = c.execute("SELECT COUNT(*) n FROM users").fetchone()["n"]
-    chats = c.execute("SELECT COUNT(*) n FROM chats").fetchone()["n"]
-    msgs = c.execute("SELECT COUNT(*) n FROM messages").fetchone()["n"]
+    users_count = c.execute(
+        "SELECT COUNT(*) n FROM users"
+    ).fetchone()["n"]
+
+    chats_count = c.execute(
+        "SELECT COUNT(*) n FROM chats"
+    ).fetchone()["n"]
+
+    messages_count = c.execute(
+        "SELECT COUNT(*) n FROM messages"
+    ).fetchone()["n"]
 
     usage_total = c.execute(
         "SELECT COALESCE(SUM(input_chars+output_chars),0) n FROM usage"
     ).fetchone()["n"]
 
-    logs_total = c.execute("SELECT COUNT(*) n FROM logs").fetchone()["n"]
+    logs_total = c.execute(
+        "SELECT COUNT(*) n FROM logs"
+    ).fetchone()["n"]
 
     c.close()
 
     return {
-        "users": users,
-        "chats": chats,
-        "messages": msgs,
+        "users": users_count,
+        "chats": chats_count,
+        "messages": messages_count,
         "characters": usage_total,
         "logs": logs_total
     }
 
+
+# =========================================================
+# ADMIN API KEYS
+# =========================================================
 
 @app.get("/api/admin/keys")
 def admin_keys(u=Depends(admin)):
     c = conn()
 
     rows = c.execute(
-        "SELECT id,label,active,created_at FROM api_keys ORDER BY id DESC"
+        """
+        SELECT id,label,active,created_at
+        FROM api_keys
+        ORDER BY id DESC
+        """
     ).fetchall()
 
     c.close()
@@ -1117,12 +1282,21 @@ def toggle_key(key_id: int, u=Depends(admin)):
 @app.delete("/api/admin/keys/{key_id}")
 def remove_key(key_id: int, u=Depends(admin)):
     c = conn()
-    c.execute("DELETE FROM api_keys WHERE id=?", (key_id,))
+
+    c.execute(
+        "DELETE FROM api_keys WHERE id=?",
+        (key_id,)
+    )
+
     c.commit()
     c.close()
 
     return {"ok": True}
 
+
+# =========================================================
+# ADMIN SETTINGS
+# =========================================================
 
 @app.get("/api/admin/settings")
 def settings(u=Depends(admin)):
@@ -1154,6 +1328,10 @@ def update_setting(req: SettingReq, u=Depends(admin)):
     return {"ok": True}
 
 
+# =========================================================
+# ADMIN LOGS
+# =========================================================
+
 @app.get("/api/admin/logs")
 def logs(u=Depends(admin)):
     c = conn()
@@ -1161,13 +1339,19 @@ def logs(u=Depends(admin)):
     rows = c.execute(
         """
         SELECT id,user_id,event,status,details,created_at
-        FROM logs ORDER BY id DESC LIMIT 200
+        FROM logs
+        ORDER BY id DESC
+        LIMIT 200
         """
     ).fetchall()
 
     c.close()
     return [dict(r) for r in rows]
 
+
+# =========================================================
+# ADMIN USERS
+# =========================================================
 
 @app.get("/api/admin/users")
 def users(u=Depends(admin)):
@@ -1176,7 +1360,8 @@ def users(u=Depends(admin)):
     rows = c.execute(
         """
         SELECT id,email,role,active,created_at,is_verified
-        FROM users ORDER BY id DESC
+        FROM users
+        ORDER BY id DESC
         """
     ).fetchall()
 
@@ -1210,7 +1395,7 @@ def toggle_user(user_id: int, u=Depends(admin)):
 
 @app.post("/api/admin/reset-password/{user_id}")
 def reset_password(user_id: int, u=Depends(admin)):
-    new = secrets.token_urlsafe(10)
+    new_password = secrets.token_urlsafe(10)
 
     c = conn()
 
@@ -1225,24 +1410,29 @@ def reset_password(user_id: int, u=Depends(admin)):
 
     c.execute(
         "UPDATE users SET password_hash=? WHERE id=?",
-        (pwd.hash(new), user_id)
+        (pwd.hash(new_password), user_id)
     )
 
     c.commit()
     c.close()
 
-    return {"temporary_password": new}
+    return {"temporary_password": new_password}
 
+
+# =========================================================
+# ADMIN USAGE
+# =========================================================
 
 @app.get("/api/admin/usage")
 def usage(u=Depends(admin)):
     c = conn()
 
     rows = c.execute("""
-        SELECT model,
-               COUNT(*) requests,
-               SUM(input_chars) input_chars,
-               SUM(output_chars) output_chars
+        SELECT
+            model,
+            COUNT(*) requests,
+            SUM(input_chars) input_chars,
+            SUM(output_chars) output_chars
         FROM usage
         GROUP BY model
         ORDER BY requests DESC
@@ -1252,8 +1442,13 @@ def usage(u=Depends(admin)):
     return [dict(r) for r in rows]
 
 
+# =========================================================
+# RUN
+# =========================================================
+
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(
         "app:app",
         host="0.0.0.0",
