@@ -986,13 +986,6 @@ function App() {
             </div>
           )}
 
-          <div className="disclaimer">
-            NG INTELLIGENCE may make mistakes.
-            Review important code before
-            production use.
-          </div>
-        </main>
-      </div>
 
       {admin && (
         <Admin
