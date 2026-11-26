@@ -368,20 +368,52 @@ def log(user_id, event, status, details=""):
 # =========================================================
 
 def send_verification_email(to_email, code):
-    smtp_email = os.getenv("SMTP_EMAIL", "").strip()
-    smtp_password = os.getenv("SMTP_PASSWORD", "").strip()
-    smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com").strip()
+    script_url = os.getenv("GOOGLE_SCRIPT_URL", "").strip()
+    secret_key = os.getenv("GOOGLE_SCRIPT_SECRET", "").strip()
 
-    try:
-        smtp_port = int(os.getenv("SMTP_PORT", "587"))
-    except ValueError:
-        raise HTTPException(503, "Invalid SMTP port configuration.")
-
-    if not smtp_email or not smtp_password:
+    if not script_url or not secret_key:
         raise HTTPException(
             503,
-            "Email service is not configured. Please contact support."
+            "Google Email API is not configured."
         )
+
+    try:
+        response = requests.post(
+            script_url,
+            params={"key": secret_key},
+            json={
+                "email": to_email,
+                "code": str(code)
+            },
+            timeout=30
+        )
+
+        response.raise_for_status()
+
+        try:
+            result = response.json()
+        except ValueError:
+            raise HTTPException(
+                503,
+                "Invalid response from Google Email API."
+            )
+
+        if not result.get("success"):
+            print("[EMAIL API ERROR]", result.get("error", "Unknown error"))
+            raise HTTPException(
+                503,
+                "Unable to send verification email. Please try again later."
+            )
+
+        print(f"[EMAIL SENT] Verification email sent to {to_email}")
+
+    except requests.RequestException as error:
+        print(f"[EMAIL API ERROR] {type(error).__name__}: {error}")
+        raise HTTPException(
+            503,
+            "Google Email service is temporarily unavailable."
+        )
+
 
     message = EmailMessage()
     message["Subject"] = "NG INTELLIGENCE - Email Verification"
