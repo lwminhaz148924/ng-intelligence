@@ -367,6 +367,7 @@ def log(user_id, event, status, details=""):
 # EMAIL VERIFICATION
 # =========================================================
 
+
 def send_verification_email(to_email, code):
     script_url = os.getenv("GOOGLE_SCRIPT_URL", "").strip()
     secret_key = os.getenv("GOOGLE_SCRIPT_SECRET", "").strip()
@@ -380,13 +381,39 @@ def send_verification_email(to_email, code):
     try:
         response = requests.post(
             script_url,
-            params={"key": secret_key},
             json={
                 "email": to_email,
-                "code": str(code)
+                "code": str(code),
+                "secret": secret_key
             },
             timeout=30
         )
+
+        response.raise_for_status()
+        result = response.json()
+
+        if not result.get("success"):
+            print("[EMAIL API ERROR]", result.get("error", "Unknown error"))
+            raise HTTPException(
+                503,
+                "Unable to send verification email. Please try again later."
+            )
+
+        print(f"[EMAIL SENT] Verification email sent to {to_email}")
+
+    except requests.RequestException as error:
+        print(f"[EMAIL API ERROR] {type(error).__name__}: {error}")
+        raise HTTPException(
+            503,
+            "Google Email service is temporarily unavailable."
+        )
+    except ValueError as error:
+        print(f"[EMAIL API ERROR] Invalid JSON response: {error}")
+        raise HTTPException(
+            503,
+            "Invalid response from Google Email API."
+        )
+
 
         response.raise_for_status()
 
