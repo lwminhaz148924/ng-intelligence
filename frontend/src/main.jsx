@@ -1,3 +1,4 @@
+
 import React, { useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import ReactMarkdown from 'react-markdown'
@@ -54,7 +55,6 @@ function Brand() {
   return (
     <div className="brand">
       <span className="brandmark">N</span>
-
       <div>
         <b>NG INTELLIGENCE</b>
         <small>INTELLIGENCE, REIMAGINED.</small>
@@ -76,7 +76,6 @@ function Auth({ done }) {
 
   async function submit(e) {
     e.preventDefault()
-
     setBusy(true)
     setErr('')
 
@@ -150,11 +149,7 @@ function Auth({ done }) {
             />
           </label>
 
-          {err && (
-            <div className="error">
-              {err}
-            </div>
-          )}
+          {err && <div className="error">{err}</div>}
 
           <button
             className="gradientbtn authbtn"
@@ -176,16 +171,10 @@ function Auth({ done }) {
 
           <button
             onClick={() =>
-              setMode(
-                mode === 'login'
-                  ? 'register'
-                  : 'login'
-              )
+              setMode(mode === 'login' ? 'register' : 'login')
             }
           >
-            {mode === 'login'
-              ? 'Create account'
-              : 'Sign in'}
+            {mode === 'login' ? 'Create account' : 'Sign in'}
           </button>
         </div>
       </div>
@@ -243,17 +232,11 @@ function Admin({ close }) {
       <div className="admin">
         <div className="adminhead">
           <div>
-            <span className="eyebrow">
-              CONTROL CENTER
-            </span>
-
+            <span className="eyebrow">CONTROL CENTER</span>
             <h2>NG INTELLIGENCE Admin</h2>
           </div>
 
-          <button
-            className="icon"
-            onClick={close}
-          >
+          <button className="icon" onClick={close}>
             <X />
           </button>
         </div>
@@ -287,61 +270,39 @@ function Admin({ close }) {
             ].map(x => (
               <div className="stat" key={x[0]}>
                 <span>{x[0]}</span>
-                <b>
-                  {Number(x[1]).toLocaleString()}
-                </b>
+                <b>{Number(x[1]).toLocaleString()}</b>
               </div>
             ))}
           </div>
         )}
 
         {tab === 'keys' && (
-          <Keys
-            keys={keys}
-            reload={load}
-          />
+          <Keys keys={keys} reload={load} />
         )}
 
         {tab === 'settings' && (
-          <SettingsPanel
-            data={settings}
-            reload={load}
-          />
+          <SettingsPanel data={settings} reload={load} />
         )}
 
         {tab === 'users' && (
           <div className="table">
             {users.map(x => (
-              <div
-                className="row"
-                key={x.id}
-              >
+              <div className="row" key={x.id}>
                 <div>
                   <b>{x.email}</b>
-
                   <small>
-                    {x.role} ·{' '}
-                    {x.active
-                      ? 'Active'
-                      : 'Disabled'}
+                    {x.role} · {x.active ? 'Active' : 'Disabled'}
                   </small>
                 </div>
 
                 <button
                   onClick={() =>
-                    api(
-                      '/api/admin/users/' +
-                        x.id +
-                        '/toggle',
-                      {
-                        method: 'PATCH'
-                      }
-                    ).then(load)
+                    api('/api/admin/users/' + x.id + '/toggle', {
+                      method: 'PATCH'
+                    }).then(load)
                   }
                 >
-                  {x.active
-                    ? 'Disable'
-                    : 'Enable'}
+                  {x.active ? 'Disable' : 'Enable'}
                 </button>
               </div>
             ))}
@@ -351,18 +312,10 @@ function Admin({ close }) {
         {tab === 'logs' && (
           <div className="logs">
             {logs.map(x => (
-              <div
-                className="log"
-                key={x.id}
-              >
+              <div className="log" key={x.id}>
                 <b>{x.event}</b>
-
                 <span>{x.status}</span>
-
-                <small>
-                  {x.details} ·{' '}
-                  {x.created_at}
-                </small>
+                <small>{x.details} · {x.created_at}</small>
               </div>
             ))}
           </div>
@@ -377,70 +330,45 @@ function Admin({ close }) {
 ========================= */
 
 function Keys({ keys, reload }) {
-  const [label, setLabel] =
-    useState('Primary Gemini')
-
-  const [key, setKey] =
-    useState('')
+  const [label, setLabel] = useState('Primary Gemini')
+  const [key, setKey] = useState('')
 
   return (
     <div>
       <div className="notice">
         <KeyRound />
-
         <div>
-          <b>
-            Secure Gemini key management
-          </b>
-
+          <b>Secure Gemini key management</b>
           <p>
-            Keys are encrypted at rest and
-            never rendered back to the browser.
+            Keys are encrypted at rest and never rendered back to the browser.
           </p>
         </div>
       </div>
 
       {keys.map(k => (
-        <div
-          className="row"
-          key={k.id}
-        >
+        <div className="row" key={k.id}>
           <div>
             <b>{k.label}</b>
-
             <small>
-              {k.active
-                ? 'Active'
-                : 'Disabled'}{' '}
-              · {k.created_at}
+              {k.active ? 'Active' : 'Disabled'} · {k.created_at}
             </small>
           </div>
 
           <button
             onClick={() =>
-              api(
-                '/api/admin/keys/' +
-                  k.id,
-                {
-                  method: 'PATCH'
-                }
-              ).then(reload)
+              api('/api/admin/keys/' + k.id, {
+                method: 'PATCH'
+              }).then(reload)
             }
           >
-            {k.active
-              ? 'Disable'
-              : 'Enable'}
+            {k.active ? 'Disable' : 'Enable'}
           </button>
 
           <button
             onClick={() =>
-              api(
-                '/api/admin/keys/' +
-                  k.id,
-                {
-                  method: 'DELETE'
-                }
-              ).then(reload)
+              api('/api/admin/keys/' + k.id, {
+                method: 'DELETE'
+              }).then(reload)
             }
           >
             <Trash2 size={14} />
@@ -451,17 +379,13 @@ function Keys({ keys, reload }) {
       <div className="add">
         <input
           value={label}
-          onChange={e =>
-            setLabel(e.target.value)
-          }
+          onChange={e => setLabel(e.target.value)}
           placeholder="Key label"
         />
 
         <input
           value={key}
-          onChange={e =>
-            setKey(e.target.value)
-          }
+          onChange={e => setKey(e.target.value)}
           placeholder="Gemini API key"
         />
 
@@ -470,10 +394,7 @@ function Keys({ keys, reload }) {
           onClick={() =>
             api('/api/admin/keys', {
               method: 'POST',
-              body: JSON.stringify({
-                label,
-                key
-              })
+              body: JSON.stringify({ label, key })
             }).then(() => {
               setKey('')
               reload()
@@ -491,64 +412,51 @@ function Keys({ keys, reload }) {
    SETTINGS
 ========================= */
 
-function SettingsPanel({
-  data,
-  reload
-}) {
-  const [model, setModel] =
-    useState(data.model)
+function SettingsPanel({ data, reload }) {
+  const [model, setModel] = useState(data.model)
+  const [prompt, setPrompt] = useState(data.system_prompt)
 
-  const [prompt, setPrompt] =
-    useState(data.system_prompt)
+  useEffect(() => {
+    setModel(data.model || '')
+    setPrompt(data.system_prompt || '')
+  }, [data])
 
   return (
     <div className="settings">
       <label>
         Gemini model
-
         <input
           value={model}
-          onChange={e =>
-            setModel(e.target.value)
-          }
+          onChange={e => setModel(e.target.value)}
         />
       </label>
 
       <label>
         System prompt
-
         <textarea
           value={prompt}
-          onChange={e =>
-            setPrompt(e.target.value)
-          }
+          onChange={e => setPrompt(e.target.value)}
         />
       </label>
 
       <button
         className="gradientbtn"
         onClick={async () => {
-          await api(
-            '/api/admin/settings',
-            {
-              method: 'PUT',
-              body: JSON.stringify({
-                name: 'model',
-                value: model
-              })
-            }
-          )
+          await api('/api/admin/settings', {
+            method: 'PUT',
+            body: JSON.stringify({
+              name: 'model',
+              value: model
+            })
+          })
 
-          await api(
-            '/api/admin/settings',
-            {
-              method: 'PUT',
-              body: JSON.stringify({
-                name: 'system_prompt',
-                value: prompt
-              })
-            }
-          )
+          await api('/api/admin/settings', {
+            method: 'PUT',
+            body: JSON.stringify({
+              name: 'system_prompt',
+              value: prompt
+            })
+          })
 
           reload()
         }}
@@ -570,10 +478,6 @@ function TypingIndicator() {
       role="status"
       aria-label="NG INTELLIGENCE is responding"
     >
-      <div className="avatar ai-avatar">
-        N
-      </div>
-
       <div className="typingbubble">
         <span className="typingdot" />
         <span className="typingdot" />
@@ -587,44 +491,24 @@ function TypingIndicator() {
    MESSAGE BUBBLE
 ========================= */
 
-function MessageBubble({
-  message,
-  index
-}) {
-  const isAI =
-    message.role === 'assistant'
+function MessageBubble({ message, index }) {
+  const isAI = message.role === 'assistant'
 
   return (
     <div
-      className={
-        'msg ' +
-        message.role +
-        ' message-enter'
-      }
+      className={'msg ' + message.role + ' message-enter'}
       style={{
-        animationDelay:
-          `${Math.min(index * 35, 180)}ms`
+        animationDelay: `${Math.min(index * 35, 180)}ms`
       }}
     >
-      <div
-        className={
-          'avatar ' +
-          (isAI ? 'ai-avatar' : '')
-        }
-      >
-        {isAI ? 'N' : 'U'}
-      </div>
+      {!isAI && <div className="avatar">U</div>}
 
       <div className="content">
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
-        >
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>
           {message.content}
         </ReactMarkdown>
 
-        {isAI && (
-          <div className="message-glow" />
-        )}
+        {isAI && <div className="message-glow" />}
       </div>
     </div>
   )
@@ -635,48 +519,38 @@ function MessageBubble({
 ========================= */
 
 function App() {
-  const [user, setUser] =
-    useState(null)
+  const [user, setUser] = useState(null)
   const messagesEndRef = useRef(null)
 
-  const [side, setSide] =
-    useState(true)
+  const [side, setSide] = useState(true)
+  const [chats, setChats] = useState([])
+  const [cid, setCid] = useState(null)
+  const [msgs, setMsgs] = useState([])
+  const [input, setInput] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [admin, setAdmin] = useState(false)
 
-  const [chats, setChats] =
-    useState([])
-
-  const [cid, setCid] =
-    useState(null)
-
-  const [msgs, setMsgs] =
-    useState([])
-
-  const [input, setInput] =
-    useState('')
-
-  const [busy, setBusy] =
-    useState(false)
-
-  const [admin, setAdmin] =
-    useState(false)
+  /* AUTO SCROLL */
 
   useEffect(() => {
-    if (msgs.length > 0 || busy) {
+    if (!msgs.length && !busy) return
+
+    requestAnimationFrame(() => {
       messagesEndRef.current?.scrollIntoView({
         behavior: 'smooth',
         block: 'end'
       })
-    }
-  }, [msgs.length, busy])
+    })
+  }, [msgs, busy])
+
+  /* CHECK LOGIN */
 
   useEffect(() => {
     if (token()) {
       api('/api/me')
         .then(setUser)
         .catch(() => {
-          localStorage.removeItem(
-            'ng_token'
-          )
+          localStorage.removeItem('ng_token')
         })
     }
   }, [])
@@ -689,9 +563,7 @@ function App() {
 
   async function loadChats() {
     try {
-      setChats(
-        await api('/api/chats')
-      )
+      setChats(await api('/api/chats'))
     } catch (e) {
       console.error(e)
     }
@@ -700,24 +572,18 @@ function App() {
   async function openChat(id) {
     try {
       setCid(id)
-
-      setMsgs(
-        await api(
-          '/api/chats/' + id
-        )
-      )
+      setMsgs(await api('/api/chats/' + id))
     } catch (e) {
       console.error(e)
     }
   }
 
-  async function send() {
-    const text =
-      input.trim()
+  /* SEND MESSAGE */
 
-    if (!text || busy) {
-      return
-    }
+  async function send() {
+    const text = input.trim()
+
+    if (!text || busy) return
 
     setInput('')
 
@@ -732,14 +598,13 @@ function App() {
     setBusy(true)
 
     try {
-      const d =
-        await api('/api/chat', {
-          method: 'POST',
-          body: JSON.stringify({
-            message: text,
-            chat_id: cid
-          })
+      const d = await api('/api/chat', {
+        method: 'POST',
+        body: JSON.stringify({
+          message: text,
+          chat_id: cid
         })
+      })
 
       setCid(d.chat_id)
 
@@ -757,9 +622,7 @@ function App() {
         ...m,
         {
           role: 'assistant',
-          content:
-            '**Request failed:** ' +
-            e.message
+          content: '**Request failed:** ' + e.message
         }
       ])
     } finally {
@@ -768,35 +631,28 @@ function App() {
   }
 
   function logout() {
-    localStorage.removeItem(
-      'ng_token'
-    )
-
+    localStorage.removeItem('ng_token')
     setUser(null)
+    setChats([])
+    setMsgs([])
+    setCid(null)
   }
 
   if (!user) {
-    return (
-      <Auth done={setUser} />
-    )
+    return <Auth done={setUser} />
   }
 
   return (
     <div className="app">
+
       {/* HEADER */}
 
       <header>
         <button
           className="icon"
-          onClick={() =>
-            setSide(!side)
-          }
+          onClick={() => setSide(!side)}
         >
-          {side ? (
-            <X />
-          ) : (
-            <Menu />
-          )}
+          {side ? <X /> : <Menu />}
         </button>
 
         <Brand />
@@ -810,18 +666,13 @@ function App() {
           {user.role === 'admin' && (
             <button
               className="icon"
-              onClick={() =>
-                setAdmin(true)
-              }
+              onClick={() => setAdmin(true)}
             >
               <Shield />
             </button>
           )}
 
-          <button
-            className="icon"
-            onClick={logout}
-          >
+          <button className="icon" onClick={logout}>
             <LogOut />
           </button>
         </div>
@@ -844,31 +695,20 @@ function App() {
               New conversation
             </button>
 
-            <div className="label">
-              CONVERSATIONS
-            </div>
+            <div className="label">CONVERSATIONS</div>
 
             <div className="chatlist">
               {chats.map(c => (
                 <button
                   className={
                     'conversation ' +
-                    (cid === c.id
-                      ? 'selected'
-                      : '')
+                    (cid === c.id ? 'selected' : '')
                   }
                   key={c.id}
-                  onClick={() =>
-                    openChat(c.id)
-                  }
+                  onClick={() => openChat(c.id)}
                 >
-                  <MessageSquare
-                    size={15}
-                  />
-
-                  <span>
-                    {c.title}
-                  </span>
+                  <MessageSquare size={15} />
+                  <span>{c.title}</span>
                 </button>
               ))}
             </div>
@@ -876,18 +716,12 @@ function App() {
             <div className="sidebottom">
               <div className="userpill">
                 <div className="avatar">
-                  {user.email[0]
-                    .toUpperCase()}
+                  {user.email[0].toUpperCase()}
                 </div>
 
                 <div>
-                  <b>
-                    {user.email}
-                  </b>
-
-                  <small>
-                    {user.role}
-                  </small>
+                  <b>{user.email}</b>
+                  <small>{user.role}</small>
                 </div>
               </div>
 
@@ -908,27 +742,19 @@ function App() {
           <div className="maininner">
 
             {msgs.length === 0 ? (
-              <Home
-                setInput={
-                  setInput
-                }
-              />
+              <Home setInput={setInput} />
             ) : (
               <div className="messages">
 
-                {msgs.map(
-                  (m, i) => (
-                    <MessageBubble
-                      key={`${i}-${m.role}-${m.content.slice(0, 24)}`}
-                      message={m}
-                      index={i}
-                    />
-                  )
-                )}
+                {msgs.map((m, i) => (
+                  <MessageBubble
+                    key={`${i}-${m.role}-${m.content.slice(0, 24)}`}
+                    message={m}
+                    index={i}
+                  />
+                ))}
 
-                {busy && (
-                  <TypingIndicator />
-                )}
+                {busy && <TypingIndicator />}
 
                 <div
                   ref={messagesEndRef}
@@ -941,78 +767,46 @@ function App() {
 
           </div>
 
-          {/* COMPOSER */}
+          {/* COMPOSER - HIDDEN WHILE AI RESPONDS */}
 
-          <div className="composer">
+          {!busy && (
+            <div className="composer">
+              <textarea
+                value={input}
+                onChange={e => setInput(e.target.value)}
+                onInput={e => {
+                  e.currentTarget.style.height = '45px'
+                  e.currentTarget.style.height =
+                    `${Math.min(e.currentTarget.scrollHeight, 150)}px`
+                }}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault()
+                    send()
+                  }
+                }}
+                placeholder="Ask NG INTELLIGENCE anything…"
+              />
 
-            <textarea
-              value={input}
-              onChange={e =>
-                setInput(
-                  e.target.value
-                )
-              }
-              onInput={e => {
-                e.currentTarget.style.height =
-                  '45px'
-                e.currentTarget.style.height =
-                  `${Math.min(
-                    e.currentTarget.scrollHeight,
-                    150
-                  )}px`
-              }}
-              onKeyDown={e => {
-                if (
-                  e.key === 'Enter' &&
-                  !e.shiftKey
-                ) {
-                  e.preventDefault()
-                  send()
-                }
-              }}
-              placeholder="Ask NG INTELLIGENCE anything…"
-            />
-
-            <button
-              className={
-                'send ' +
-                (input.trim()
-                  ? 'ready'
-                  : '')
-              }
-              onClick={send}
-              disabled={
-                busy ||
-                !input.trim()
-              }
-            >
-              {busy ? (
-                <span className="sendloading">
-                  <i />
-                  <i />
-                  <i />
-                </span>
-              ) : (
+              <button
+                className={'send ' + (input.trim() ? 'ready' : '')}
+                onClick={send}
+                disabled={!input.trim()}
+              >
                 <Send size={18} />
-              )}
-            </button>
-          </div>
+              </button>
+            </div>
+          )}
 
-          <div className="disclaimer">
-            NG INTELLIGENCE may make mistakes.
-            Review important code before
-            production use.
-          </div>
         </main>
       </div>
 
+      {/* ADMIN MODAL */}
+
       {admin && (
-        <Admin
-          close={() =>
-            setAdmin(false)
-          }
-        />
+        <Admin close={() => setAdmin(false)} />
       )}
+
     </div>
   )
 }
@@ -1021,9 +815,7 @@ function App() {
    HOME
 ========================= */
 
-function Home({
-  setInput
-}) {
+function Home({ setInput }) {
   const cards = [
     [
       'Build',
@@ -1049,18 +841,13 @@ function Home({
 
   return (
     <div className="home">
-
       <div className="heroicon">
         <Sparkles />
       </div>
 
-      <span className="eyebrow">
-        NG INTELLIGENCE
-      </span>
+      <span className="eyebrow">NG INTELLIGENCE</span>
 
-      <h1>
-        What can I help you build?
-      </h1>
+      <h1>What can I help you build?</h1>
 
       <p>
         A private AI workspace for coding,
@@ -1071,18 +858,14 @@ function Home({
         {cards.map(x => (
           <button
             key={x[0]}
-            onClick={() =>
-              setInput(x[2])
-            }
+            onClick={() => setInput(x[2])}
           >
             <div>
               <b>{x[0]}</b>
               <span>{x[1]}</span>
             </div>
 
-            <ChevronRight
-              size={15}
-            />
+            <ChevronRight size={15} />
           </button>
         ))}
       </div>
