@@ -656,14 +656,15 @@ function App() {
     useState(false)
 
   useEffect(() => {
-    if (msgs.length > 0 || busy) {
-      messagesEndRef.current?.scrollIntoView({
-        behavior: 'smooth',
-        block: 'end'
-      })
-    }
-  }, [msgs.length, busy])
+  if (!msgs.length && !busy) return
 
+  requestAnimationFrame(() => {
+    messagesEndRef.current?.scrollIntoView({
+      behavior: 'smooth',
+      block: 'end'
+    })
+  })
+}, [msgs, busy])
   useEffect(() => {
     if (token()) {
       api('/api/me')
