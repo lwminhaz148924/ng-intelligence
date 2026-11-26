@@ -381,11 +381,15 @@ Created by Lw Minhaz
             server.login(smtp_email, smtp_password)
             server.send_message(message)
 
-    except Exception:
-        raise HTTPException(
-            503,
-            "Unable to send verification email. Please try again later."
-        )
+   except Exception as e:
+    print(
+        f"[SMTP ERROR] {type(e).__name__}: {e}",
+        flush=True
+    )
+    raise HTTPException(
+        503,
+        "Unable to send verification email. Please try again later."
+    )
 
 
 def create_verification_code(email):
