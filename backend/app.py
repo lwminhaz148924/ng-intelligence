@@ -597,35 +597,20 @@ def register(request: Request, a: Auth):
     c = conn()
 
     try:
-        cur = c.execute(
-            """
-            INSERT INTO users(
-                email,password_hash,role,created_at,is_verified
-            ) VALUES(?,?,?,?,0)
-            """,
-            (email, pwd.hash(a.password), "user", now())
+        with smtplib.SMTP(smtp_host, smtp_port, timeout=20) as server:
+            server.starttls()
+            server.login(smtp_email, smtp_password)
+            server.send_message(message)
+
+    except Exception as e:
+        print(
+            f"[SMTP ERROR] {type(e).__name__}: {e}",
+            flush=True
         )
-
-        code_hash = hashlib.sha256(code.encode()).hexdigest()
-        expires = (datetime.utcnow() + timedelta(minutes=10)).isoformat()
-
-        c.execute(
-            """
-            INSERT INTO verification_codes(
-                email,code_hash,expires_at,attempts,created_at
-            ) VALUES(?,?,?,?,?)
-            """,
-            (email, code_hash, expires, 0, now())
+        raise HTTPException(
+            503,
+            "Unable to send verification email. Please try again later."
         )
-
-        c.commit()
-
-        return {
-            "verification_required": True,
-            "email": email,
-            "message": "Verification code sent to your email."
-        }
-
     except sqlite3.IntegrityError:
         c.rollback()
         raise HTTPException(409, "Account already exists.")
