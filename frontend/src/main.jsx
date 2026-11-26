@@ -1,3 +1,4 @@
+
 import React, { useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import ReactMarkdown from 'react-markdown'
@@ -570,10 +571,6 @@ function TypingIndicator() {
       role="status"
       aria-label="NG INTELLIGENCE is responding"
     >
-      <div className="avatar ai-avatar">
-        N
-      </div>
-
       <div className="typingbubble">
         <span className="typingdot" />
         <span className="typingdot" />
@@ -606,14 +603,11 @@ function MessageBubble({
           `${Math.min(index * 35, 180)}ms`
       }}
     >
-      <div
-        className={
-          'avatar ' +
-          (isAI ? 'ai-avatar' : '')
-        }
-      >
-        {isAI ? 'N' : 'U'}
-      </div>
+      {!isAI && (
+        <div className="avatar">
+          U
+        </div>
+      )}
 
       <div className="content">
         <ReactMarkdown
@@ -637,6 +631,7 @@ function MessageBubble({
 function App() {
   const [user, setUser] =
     useState(null)
+
   const messagesEndRef = useRef(null)
 
   const [side, setSide] =
@@ -941,62 +936,54 @@ function App() {
 
           </div>
 
-          {/* COMPOSER */}
+          {/* COMPOSER - HIDE WHILE AI IS RESPONDING */}
 
-          <div className="composer">
+          {!busy && (
+            <div className="composer">
 
-            <textarea
-              value={input}
-              onChange={e =>
-                setInput(
-                  e.target.value
-                )
-              }
-              onInput={e => {
-                e.currentTarget.style.height =
-                  '45px'
-                e.currentTarget.style.height =
-                  `${Math.min(
-                    e.currentTarget.scrollHeight,
-                    150
-                  )}px`
-              }}
-              onKeyDown={e => {
-                if (
-                  e.key === 'Enter' &&
-                  !e.shiftKey
-                ) {
-                  e.preventDefault()
-                  send()
+              <textarea
+                value={input}
+                onChange={e =>
+                  setInput(
+                    e.target.value
+                  )
                 }
-              }}
-              placeholder="Ask NG INTELLIGENCE anything…"
-            />
+                onInput={e => {
+                  e.currentTarget.style.height =
+                    '45px'
 
-            <button
-              className={
-                'send ' +
-                (input.trim()
-                  ? 'ready'
-                  : '')
-              }
-              onClick={send}
-              disabled={
-                busy ||
-                !input.trim()
-              }
-            >
-              {busy ? (
-                <span className="sendloading">
-                  <i />
-                  <i />
-                  <i />
-                </span>
-              ) : (
+                  e.currentTarget.style.height =
+                    `${Math.min(
+                      e.currentTarget.scrollHeight,
+                      150
+                    )}px`
+                }}
+                onKeyDown={e => {
+                  if (
+                    e.key === 'Enter' &&
+                    !e.shiftKey
+                  ) {
+                    e.preventDefault()
+                    send()
+                  }
+                }}
+                placeholder="Ask NG INTELLIGENCE anything…"
+              />
+
+              <button
+                className={
+                  'send ' +
+                  (input.trim()
+                    ? 'ready'
+                    : '')
+                }
+                onClick={send}
+                disabled={!input.trim()}
+              >
                 <Send size={18} />
-              )}
-            </button>
-          </div>
+              </button>
+            </div>
+          )}
 
           <div className="disclaimer">
             NG INTELLIGENCE may make mistakes.
