@@ -85,6 +85,7 @@ function Verification({ email, onVerified, onBack }) {
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const [resent, setResent] = useState(false)
+  const [verified, setVerified] = useState(false)
 
   async function verify(e) {
     e.preventDefault()
@@ -96,7 +97,9 @@ function Verification({ email, onVerified, onBack }) {
         method: 'POST', body: JSON.stringify({ email, code })
       })
       localStorage.setItem('ng_token', d.token)
-      onVerified(d.user)
+      setVerified(true)
+      setCode('')
+      window.setTimeout(() => onVerified(d.user), 850)
     } catch (x) {
       setErr(x.message)
     } finally {
@@ -117,20 +120,21 @@ function Verification({ email, onVerified, onBack }) {
 
   return (
     <AuthShell>
-      <div className="verify-icon"><CheckCircle size={28} /></div>
+      <div className={'verify-icon ' + (verified ? 'verified' : '')}><CheckCircle size={28} /></div>
       <div className="authcopy">
         <span className="eyebrow">VERIFY YOUR EMAIL</span>
-        <h1>Almost there.</h1>
-        <p>We sent a 6-digit verification code to <b>{email}</b>.</p>
+        <h1>{verified ? 'Verified!' : 'Almost there.'}</h1>
+        <p>{verified ? 'Your email has been successfully verified.' : <>We sent a 6-digit verification code to <b>{email}</b>.</>}</p>
       </div>
       <form onSubmit={verify}>
         <label>Verification code
           <input className="otpinput" inputMode="numeric" maxLength={6} value={code} onChange={e => setCode(e.target.value.replace(/\D/g,'').slice(0,6))} placeholder="000000" autoFocus required />
         </label>
-        {busy && <div className="verify-progress"><span className="spinner" /> Verifying your email…</div>}
+        {busy && !verified && <div className="verify-progress"><span className="spinner" /> Verifying your email…</div>}
+        {verified && <div className="verify-progress verified-text"><CheckCircle size={17}/> Verified successfully</div>}
         {err && <div className="error">{err}</div>}
         {resent && <div className="success">A new verification code was sent.</div>}
-        <button className="gradientbtn authbtn" disabled={busy || code.length !== 6} type="submit">{busy ? 'Verifying…' : 'Verify email'}</button>
+        <button className="gradientbtn authbtn" disabled={busy || code.length !== 6} type="submit">{verified ? 'Verified ✓' : busy ? 'Verifying…' : 'Verify email'}</button>
       </form>
       <div className="authlinks">
         <button onClick={resend} disabled={busy}>Resend code</button>
@@ -745,23 +749,30 @@ function App() {
 
   useEffect(() => {
     if (user) {
-      loadChats()
+      loadChats().then(async (items) => {
+        const savedId = localStorage.getItem(`ng_active_chat_${user.id}`)
+        if (savedId && items.some(item => String(item.id) === savedId)) {
+          await openChat(Number(savedId))
+        }
+      })
     }
   }, [user])
 
   async function loadChats() {
     try {
-      setChats(
-        await api('/api/chats')
-      )
+      const items = await api('/api/chats')
+      setChats(items)
+      return items
     } catch (e) {
       console.error(e)
+      return []
     }
   }
 
   async function openChat(id) {
     try {
       setCid(id)
+      if (user?.id) localStorage.setItem(`ng_active_chat_${user.id}`, String(id))
 
       setMsgs(
         await api(
@@ -804,6 +815,7 @@ function App() {
         })
 
       setCid(d.chat_id)
+      if (user?.id) localStorage.setItem(`ng_active_chat_${user.id}`, String(d.chat_id))
 
       setMsgs(m => [
         ...m,
@@ -899,6 +911,7 @@ function App() {
               className="newchat"
               onClick={() => {
                 setCid(null)
+                if (user?.id) localStorage.removeItem(`ng_active_chat_${user.id}`)
                 setMsgs([])
                 setSide(false)
               }}
