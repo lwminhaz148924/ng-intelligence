@@ -2,6 +2,7 @@ import os
 import re
 import psycopg
 from psycopg.rows import dict_row
+from psycopg_pool import ConnectionPool
 import hashlib
 import secrets
 import base64
@@ -105,16 +106,29 @@ app.add_middleware(
 # DATABASE
 # =========================================================
 
+# Reuse PostgreSQL connections instead of opening a new network connection
+# for every small query. This matters because each chat request performs
+# several database operations before and after calling Gemini.
+DB_POOL = ConnectionPool(
+    conninfo=DB,
+    min_size=1,
+    max_size=6,
+    timeout=8,
+    kwargs={
+        "row_factory": dict_row,
+        "connect_timeout": 8,
+        "sslmode": "require",
+    },
+    open=True,
+)
+
+
 class DatabaseConnection:
-    """Small compatibility layer for the existing SQL used by this app."""
+    """Compatibility wrapper that returns connections to the shared pool."""
 
     def __init__(self):
-        self.raw = psycopg.connect(
-            DB,
-            row_factory=dict_row,
-            connect_timeout=15,
-            sslmode="require"
-        )
+        self.raw = DB_POOL.getconn(timeout=8)
+        self._returned = False
 
     @staticmethod
     def _sql(query):
@@ -139,7 +153,9 @@ class DatabaseConnection:
         self.raw.rollback()
 
     def close(self):
-        self.raw.close()
+        if not self._returned:
+            self._returned = True
+            DB_POOL.putconn(self.raw)
 
 
 def conn():
