@@ -1305,3 +1305,102 @@ main { min-width: 0; flex: 1; position: relative; }
 @media (prefers-reduced-motion: reduce) {
   *,*::before,*::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
+/* =========================
+   FINAL UI POLISH
+========================= */
+
+.premium-text,
+.premium-text p,
+.premium-text li,
+.premium-text strong,
+.premium-text em,
+.premium-text code,
+.premium-text blockquote {
+  color: #252936;
+}
+
+.success {
+  color: #145c3b;
+  background: #ecfbf3;
+  border: 1px solid #bfe8cf;
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin: 0 0 14px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.authactions,
+.authlinks {
+  margin-top: 14px;
+}
+
+.authactions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.authactions button,
+.authlinks button {
+  border: 0;
+  background: transparent;
+  color: #5a43d6;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 3px 0;
+}
+
+.authactions button:hover,
+.authlinks button:hover {
+  text-decoration: underline;
+}
+
+.authactions button:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+}
+
+.authlinks {
+  display: grid;
+  gap: 10px;
+}
+
+.codeinput {
+  letter-spacing: .42em;
+  font-weight: 800;
+  text-align: center;
+}
+
+@media (max-width: 650px) {
+  /* On phones, the menu opens the full conversation drawer,
+     not the old icon-only 82px strip. */
+  aside {
+    width: min(310px, 88vw) !important;
+    padding: 18px 14px !important;
+  }
+
+  aside .newchat {
+    justify-content: flex-start !important;
+    padding: 0 14px !important;
+  }
+
+  aside .newchat span,
+  aside .label,
+  aside .conversation span,
+  aside .userpill b,
+  aside .userpill small {
+    display: block !important;
+  }
+
+  aside .conversation {
+    justify-content: flex-start !important;
+  }
+
+  aside .userpill {
+    justify-content: flex-start !important;
+  }
+}
