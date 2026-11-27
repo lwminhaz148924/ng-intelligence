@@ -1,13 +1,10 @@
-
 import os
 import re
 import sqlite3
 import hashlib
 import secrets
 import base64
-import smtplib
 
-from email.message import EmailMessage
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Optional
@@ -44,12 +41,11 @@ DB = DATA / "ng_intelligence.db"
 
 MODEL_DEFAULT = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
 JWT_SECRET = os.getenv("JWT_SECRET", "CHANGE_ME")
-ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "")
+ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "").strip()
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
-REMOTE_COMMANDS = os.getenv("REMOTE_COMMANDS_ENABLED", "false").lower() == "true"
 
-pwd = CryptContext(schemes=["bcrypt"], deprecated="auto")
 limiter = Limiter(key_func=get_remote_address)
+pwd = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 def encryption():
@@ -67,8 +63,7 @@ def encryption():
 
 FERNET = encryption()
 
-app = FastAPI(title="NG INTELLIGENCE", version="2.2.0")
-
+app = FastAPI(title="NG INTELLIGENCE", version="2.3.0")
 app.state.limiter = limiter
 
 
@@ -82,16 +77,18 @@ async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
 
 app.add_middleware(SlowAPIMiddleware)
 
+cors_origins = [
+    item.strip()
+    for item in os.getenv(
+        "CORS_ORIGINS",
+        "http://localhost:5173"
+    ).split(",")
+    if item.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        x.strip()
-        for x in os.getenv(
-            "CORS_ORIGINS",
-            "http://localhost:5173"
-        ).split(",")
-        if x.strip()
-    ],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"]
@@ -221,7 +218,7 @@ def init():
         )
 
     if ADMIN_EMAIL and ADMIN_PASSWORD:
-        admin_email = ADMIN_EMAIL.lower().strip()
+        admin_email = ADMIN_EMAIL.lower()
 
         existing_admin = c.execute(
             "SELECT id FROM users WHERE email=?",
@@ -367,12 +364,15 @@ def log(user_id, event, status, details=""):
 # EMAIL VERIFICATION
 # =========================================================
 
-
 def send_verification_email(to_email, code):
     script_url = os.getenv("GOOGLE_SCRIPT_URL", "").strip()
     secret_key = os.getenv("GOOGLE_SCRIPT_SECRET", "").strip()
 
     if not script_url or not secret_key:
+        print(
+            "[EMAIL API ERROR] Missing GOOGLE_SCRIPT_URL or GOOGLE_SCRIPT_SECRET",
+            flush=True
+        )
         raise HTTPException(
             503,
             "Google Email API is not configured."
@@ -390,98 +390,58 @@ def send_verification_email(to_email, code):
         )
 
         response.raise_for_status()
-        result = response.json()
-
-        if not result.get("success"):
-            print("[EMAIL API ERROR]", result.get("error", "Unknown error"))
-            raise HTTPException(
-                503,
-                "Unable to send verification email. Please try again later."
-            )
-
-        print(f"[EMAIL SENT] Verification email sent to {to_email}")
-
-    except requests.RequestException as error:
-        print(f"[EMAIL API ERROR] {type(error).__name__}: {error}")
-        raise HTTPException(
-            503,
-            "Google Email service is temporarily unavailable."
-        )
-    except ValueError as error:
-        print(f"[EMAIL API ERROR] Invalid JSON response: {error}")
-        raise HTTPException(
-            503,
-            "Invalid response from Google Email API."
-        )
-
-
-        response.raise_for_status()
 
         try:
             result = response.json()
         except ValueError:
+            print(
+                "[EMAIL API ERROR] Google API returned non-JSON response",
+                flush=True
+            )
             raise HTTPException(
                 503,
                 "Invalid response from Google Email API."
             )
 
-        if not result.get("success"):
-            print("[EMAIL API ERROR]", result.get("error", "Unknown error"))
+        if not isinstance(result, dict) or not result.get("success"):
+            error_message = (
+                result.get("error", "Unknown error")
+                if isinstance(result, dict)
+                else "Unexpected API response"
+            )
+
+            print("[EMAIL API ERROR]", error_message, flush=True)
+
             raise HTTPException(
                 503,
                 "Unable to send verification email. Please try again later."
             )
 
-        print(f"[EMAIL SENT] Verification email sent to {to_email}")
-
-    except requests.RequestException as error:
-        print(f"[EMAIL API ERROR] {type(error).__name__}: {error}")
-        raise HTTPException(
-            503,
-            "Google Email service is temporarily unavailable."
+        print(
+            f"[EMAIL SENT] Verification email sent to {to_email}",
+            flush=True
         )
 
+        return True
 
-    message = EmailMessage()
-    message["Subject"] = "NG INTELLIGENCE - Email Verification"
-    message["From"] = smtp_email
-    message["To"] = to_email
+    except HTTPException:
+        raise
 
-    message.set_content(
-        f"""Welcome to NG INTELLIGENCE!
-
-Your email verification code is:
-
-{code}
-
-This code expires in 10 minutes.
-
-If you did not create this account, you can ignore this email.
-
-Created by Lw Minhaz
-"""
-    )
-
-    try:
-        with smtplib.SMTP(smtp_host, smtp_port, timeout=20) as server:
-            server.starttls()
-            server.login(smtp_email, smtp_password)
-            server.send_message(message)
-
-    except Exception as e:
+    except requests.RequestException as error:
         print(
-            f"[SMTP ERROR] {type(e).__name__}: {e}",
+            f"[EMAIL API ERROR] {type(error).__name__}: {error}",
             flush=True
         )
         raise HTTPException(
             503,
-            "Unable to send verification email. Please try again later."
+            "Google Email service is temporarily unavailable."
         )
 
 
 def create_verification_code(email):
     code = f"{secrets.randbelow(1000000):06d}"
     code_hash = hashlib.sha256(code.encode()).hexdigest()
+
     expires = (
         datetime.utcnow() + timedelta(minutes=10)
     ).isoformat()
@@ -505,6 +465,26 @@ def create_verification_code(email):
     c.close()
 
     return code
+
+
+def delete_pending_registration(email):
+    c = conn()
+
+    try:
+        c.execute(
+            "DELETE FROM verification_codes WHERE email=?",
+            (email,)
+        )
+
+        c.execute(
+            "DELETE FROM users WHERE email=? AND is_verified=0",
+            (email,)
+        )
+
+        c.commit()
+
+    finally:
+        c.close()
 
 
 # =========================================================
@@ -534,10 +514,12 @@ def safe_path(rel):
 
 def get_setting(name, fallback=""):
     c = conn()
+
     r = c.execute(
         "SELECT value FROM settings WHERE name=?",
         (name,)
     ).fetchone()
+
     c.close()
 
     return r["value"] if r else fallback
@@ -556,20 +538,23 @@ def keys():
 
     c = conn()
 
-    for r in c.execute(
-        "SELECT id,label,key_cipher FROM api_keys WHERE active=1 ORDER BY id"
-    ):
-        try:
-            out.append(
-                (
-                    r["label"],
-                    FERNET.decrypt(r["key_cipher"].encode()).decode()
+    try:
+        for r in c.execute(
+            "SELECT id,label,key_cipher FROM api_keys WHERE active=1 ORDER BY id"
+        ):
+            try:
+                out.append(
+                    (
+                        r["label"],
+                        FERNET.decrypt(r["key_cipher"].encode()).decode()
+                    )
                 )
-            )
-        except Exception:
-            pass
+            except Exception:
+                continue
 
-    c.close()
+    finally:
+        c.close()
+
     return out
 
 
@@ -577,7 +562,10 @@ def gemini(prompt):
     active = keys()
 
     if not active:
-        raise HTTPException(503, "Gemini API key is not configured.")
+        raise HTTPException(
+            503,
+            "Gemini API key is not configured."
+        )
 
     model = get_setting("model", MODEL_DEFAULT)
     last = None
@@ -592,7 +580,12 @@ def gemini(prompt):
             payload = {
                 "systemInstruction": {
                     "parts": [
-                        {"text": get_setting("system_prompt", SYSTEM_PROMPT)}
+                        {
+                            "text": get_setting(
+                                "system_prompt",
+                                SYSTEM_PROMPT
+                            )
+                        }
                     ]
                 },
                 "contents": [
@@ -619,6 +612,7 @@ def gemini(prompt):
 
             if r.ok:
                 data = r.json()
+
                 parts = (
                     data.get("candidates", [{}])[0]
                     .get("content", {})
@@ -626,9 +620,9 @@ def gemini(prompt):
                 )
 
                 answer = "\n".join(
-                    x.get("text", "")
-                    for x in parts
-                    if x.get("text")
+                    item.get("text", "")
+                    for item in parts
+                    if item.get("text")
                 ).strip()
 
                 if answer:
@@ -636,8 +630,8 @@ def gemini(prompt):
 
             last = f"{label}: HTTP {r.status_code}"
 
-        except Exception as e:
-            last = f"{label}: {type(e).__name__}"
+        except Exception as error:
+            last = f"{label}: {type(error).__name__}"
 
     raise HTTPException(
         502,
@@ -647,7 +641,10 @@ def gemini(prompt):
 
 def extract_files(answer):
     return [
-        {"path": path, "content": content.strip()}
+        {
+            "path": path,
+            "content": content.strip()
+        }
         for path, content in re.findall(
             r'<FILE\s+path=["\']([^"\']+)["\']\s*>(.*?)</FILE>',
             answer,
@@ -659,6 +656,15 @@ def extract_files(answer):
 # =========================================================
 # HEALTH
 # =========================================================
+
+@app.get("/")
+def root():
+    return {
+        "name": "NG INTELLIGENCE",
+        "status": "online",
+        "version": "2.3.0"
+    }
+
 
 @app.get("/api/health")
 def health():
@@ -677,7 +683,7 @@ def health():
 @app.post("/api/auth/register")
 @limiter.limit("5/minute")
 def register(request: Request, a: Auth):
-    email = a.email.lower().strip()
+    email = str(a.email).lower().strip()
 
     if len(a.password) < 8:
         raise HTTPException(
@@ -689,12 +695,21 @@ def register(request: Request, a: Auth):
 
     try:
         existing = c.execute(
-            "SELECT id FROM users WHERE email=?",
+            "SELECT id, is_verified FROM users WHERE email=?",
             (email,)
         ).fetchone()
 
         if existing:
-            raise HTTPException(409, "Account already exists.")
+            if not existing["is_verified"]:
+                raise HTTPException(
+                    409,
+                    "An unverified account already exists. Request a new verification code."
+                )
+
+            raise HTTPException(
+                409,
+                "Account already exists."
+            )
 
         c.execute(
             """
@@ -725,32 +740,21 @@ def register(request: Request, a: Auth):
         send_verification_email(email, code)
 
     except HTTPException:
-        cleanup = conn()
-        cleanup.execute(
-            "DELETE FROM verification_codes WHERE email=?",
-            (email,)
-        )
-        cleanup.execute(
-            "DELETE FROM users WHERE email=? AND is_verified=0",
-            (email,)
-        )
-        cleanup.commit()
-        cleanup.close()
+        delete_pending_registration(email)
         raise
 
-    except Exception:
-        cleanup = conn()
-        cleanup.execute(
-            "DELETE FROM verification_codes WHERE email=?",
-            (email,)
+    except Exception as error:
+        print(
+            f"[REGISTER ERROR] {type(error).__name__}: {error}",
+            flush=True
         )
-        cleanup.execute(
-            "DELETE FROM users WHERE email=? AND is_verified=0",
-            (email,)
+
+        delete_pending_registration(email)
+
+        raise HTTPException(
+            503,
+            "Registration could not be completed."
         )
-        cleanup.commit()
-        cleanup.close()
-        raise HTTPException(503, "Registration could not be completed.")
 
     return {
         "verification_required": True,
@@ -766,7 +770,7 @@ def register(request: Request, a: Auth):
 @app.post("/api/auth/verify")
 @limiter.limit("10/minute")
 def verify_email(request: Request, req: VerifyReq):
-    email = req.email.lower().strip()
+    email = str(req.email).lower().strip()
     code = req.code.strip()
 
     if not re.fullmatch(r"\d{6}", code):
@@ -784,10 +788,16 @@ def verify_email(request: Request, req: VerifyReq):
         ).fetchone()
 
         if not user:
-            raise HTTPException(404, "Account not found.")
+            raise HTTPException(
+                404,
+                "Account not found."
+            )
 
         if user["is_verified"]:
-            raise HTTPException(400, "Email is already verified.")
+            raise HTTPException(
+                400,
+                "Email is already verified."
+            )
 
         record = c.execute(
             "SELECT * FROM verification_codes WHERE email=?",
@@ -806,7 +816,9 @@ def verify_email(request: Request, req: VerifyReq):
                 "Too many incorrect attempts. Request a new code."
             )
 
-        if datetime.utcnow() > datetime.fromisoformat(record["expires_at"]):
+        if datetime.utcnow() > datetime.fromisoformat(
+            record["expires_at"]
+        ):
             raise HTTPException(
                 400,
                 "Verification code expired. Request a new code."
@@ -826,9 +838,13 @@ def verify_email(request: Request, req: VerifyReq):
                 """,
                 (email,)
             )
+
             c.commit()
 
-            raise HTTPException(400, "Incorrect verification code.")
+            raise HTTPException(
+                400,
+                "Incorrect verification code."
+            )
 
         c.execute(
             "UPDATE users SET is_verified=1 WHERE email=?",
@@ -868,50 +884,41 @@ def verify_email(request: Request, req: VerifyReq):
 @app.post("/api/auth/resend-verification")
 @limiter.limit("3/minute")
 def resend_verification(request: Request, req: EmailOnly):
-    email = req.email.lower().strip()
+    email = str(req.email).lower().strip()
 
     c = conn()
+
     user = c.execute(
         "SELECT * FROM users WHERE email=?",
         (email,)
     ).fetchone()
+
     c.close()
 
     if not user:
-        raise HTTPException(404, "Account not found.")
+        raise HTTPException(
+            404,
+            "Account not found."
+        )
 
     if user["is_verified"]:
-        raise HTTPException(400, "Email is already verified.")
-
-    code = f"{secrets.randbelow(1000000):06d}"
-
-    send_verification_email(email, code)
-
-    code_hash = hashlib.sha256(code.encode()).hexdigest()
-    expires = (
-        datetime.utcnow() + timedelta(minutes=10)
-    ).isoformat()
-
-    c = conn()
-    c.execute(
-        """
-        INSERT INTO verification_codes(
-            email,code_hash,expires_at,attempts,created_at
+        raise HTTPException(
+            400,
+            "Email is already verified."
         )
-        VALUES(?,?,?,?,?)
-        ON CONFLICT(email) DO UPDATE SET
-            code_hash=excluded.code_hash,
-            expires_at=excluded.expires_at,
-            attempts=0,
-            created_at=excluded.created_at
-        """,
-        (email, code_hash, expires, 0, now())
-    )
-    c.commit()
-    c.close()
+
+    code = create_verification_code(email)
+
+    try:
+        send_verification_email(email, code)
+
+    except HTTPException:
+        raise
 
     return {
         "ok": True,
+        "verification_required": True,
+        "email": email,
         "message": "A new verification code has been sent."
     }
 
@@ -927,16 +934,22 @@ def login(request: Request, a: Auth):
 
     u = c.execute(
         "SELECT * FROM users WHERE email=?",
-        (a.email.lower().strip(),)
+        (str(a.email).lower().strip(),)
     ).fetchone()
 
     c.close()
 
     if not u or not pwd.verify(a.password, u["password_hash"]):
-        raise HTTPException(401, "Invalid email or password.")
+        raise HTTPException(
+            401,
+            "Invalid email or password."
+        )
 
     if not u["active"]:
-        raise HTTPException(403, "Account is disabled.")
+        raise HTTPException(
+            403,
+            "Account is disabled."
+        )
 
     if not u["is_verified"]:
         raise HTTPException(
@@ -986,7 +999,8 @@ def list_chats(u=Depends(current)):
     ).fetchall()
 
     c.close()
-    return [dict(r) for r in rows]
+
+    return [dict(row) for row in rows]
 
 
 @app.get("/api/chats/{chat_id}")
@@ -1000,7 +1014,10 @@ def history(chat_id: int, u=Depends(current)):
 
     if not ok:
         c.close()
-        raise HTTPException(404, "Chat not found.")
+        raise HTTPException(
+            404,
+            "Chat not found."
+        )
 
     rows = c.execute(
         """
@@ -1013,7 +1030,8 @@ def history(chat_id: int, u=Depends(current)):
     ).fetchall()
 
     c.close()
-    return [dict(r) for r in rows]
+
+    return [dict(row) for row in rows]
 
 
 @app.delete("/api/chats/{chat_id}")
@@ -1027,10 +1045,20 @@ def delete_chat(chat_id: int, u=Depends(current)):
 
     if not ok:
         c.close()
-        raise HTTPException(404, "Chat not found.")
+        raise HTTPException(
+            404,
+            "Chat not found."
+        )
 
-    c.execute("DELETE FROM messages WHERE chat_id=?", (chat_id,))
-    c.execute("DELETE FROM chats WHERE id=?", (chat_id,))
+    c.execute(
+        "DELETE FROM messages WHERE chat_id=?",
+        (chat_id,)
+    )
+
+    c.execute(
+        "DELETE FROM chats WHERE id=?",
+        (chat_id,)
+    )
 
     c.commit()
     c.close()
@@ -1045,23 +1073,29 @@ def delete_chat(chat_id: int, u=Depends(current)):
 @app.post("/api/chat")
 @limiter.limit("30/minute")
 def chat(request: Request, req: ChatReq, u=Depends(current)):
-    text = req.message.strip()
+    message_text = req.message.strip()
 
-    if not text:
-        raise HTTPException(400, "Message is empty.")
+    if not message_text:
+        raise HTTPException(
+            400,
+            "Message is empty."
+        )
 
     c = conn()
-    cid = req.chat_id
+    chat_id = req.chat_id
 
-    if cid:
+    if chat_id:
         ok = c.execute(
             "SELECT id FROM chats WHERE id=? AND user_id=?",
-            (cid, u["id"])
+            (chat_id, u["id"])
         ).fetchone()
 
         if not ok:
             c.close()
-            raise HTTPException(404, "Chat not found.")
+            raise HTTPException(
+                404,
+                "Chat not found."
+            )
 
     else:
         cur = c.execute(
@@ -1069,39 +1103,60 @@ def chat(request: Request, req: ChatReq, u=Depends(current)):
             INSERT INTO chats(user_id,title,created_at,updated_at)
             VALUES(?,?,?,?)
             """,
-            (u["id"], text[:60], now(), now())
+            (
+                u["id"],
+                message_text[:60],
+                now(),
+                now()
+            )
         )
-        cid = cur.lastrowid
+
+        chat_id = cur.lastrowid
 
     c.execute(
         """
         INSERT INTO messages(chat_id,role,content,created_at)
         VALUES(?,?,?,?)
         """,
-        (cid, "user", text, now())
+        (
+            chat_id,
+            "user",
+            message_text,
+            now()
+        )
     )
 
     rows = c.execute(
-        "SELECT role,content FROM messages WHERE chat_id=? ORDER BY id",
-        (cid,)
+        """
+        SELECT role,content
+        FROM messages
+        WHERE chat_id=?
+        ORDER BY id
+        """,
+        (chat_id,)
     ).fetchall()
 
     c.commit()
     c.close()
 
     context = "\n\n".join(
-        f"{r['role'].upper()}: {r['content']}"
-        for r in rows
+        f"{row['role'].upper()}: {row['content']}"
+        for row in rows
     )
 
     try:
         answer, model, keylabel = gemini(
             "CONVERSATION:\n" + context +
-            "\n\nCURRENT USER REQUEST:\n" + text
+            "\n\nCURRENT USER REQUEST:\n" + message_text
         )
 
-    except HTTPException as e:
-        log(u["id"], "chat", "error", str(e.detail))
+    except HTTPException as error:
+        log(
+            u["id"],
+            "chat",
+            "error",
+            str(error.detail)
+        )
         raise
 
     c = conn()
@@ -1111,12 +1166,17 @@ def chat(request: Request, req: ChatReq, u=Depends(current)):
         INSERT INTO messages(chat_id,role,content,created_at)
         VALUES(?,?,?,?)
         """,
-        (cid, "assistant", answer, now())
+        (
+            chat_id,
+            "assistant",
+            answer,
+            now()
+        )
     )
 
     c.execute(
         "UPDATE chats SET updated_at=? WHERE id=?",
-        (now(), cid)
+        (now(), chat_id)
     )
 
     c.execute(
@@ -1126,7 +1186,13 @@ def chat(request: Request, req: ChatReq, u=Depends(current)):
         )
         VALUES(?,?,?,?,?)
         """,
-        (u["id"], model, len(text), len(answer), now())
+        (
+            u["id"],
+            model,
+            len(message_text),
+            len(answer),
+            now()
+        )
     )
 
     c.commit()
@@ -1140,7 +1206,7 @@ def chat(request: Request, req: ChatReq, u=Depends(current)):
     )
 
     return {
-        "chat_id": cid,
+        "chat_id": chat_id,
         "answer": answer,
         "files": extract_files(answer),
         "model": model
@@ -1152,29 +1218,37 @@ def chat(request: Request, req: ChatReq, u=Depends(current)):
 # =========================================================
 
 @app.get("/api/workspace/files")
-def files(u=Depends(current)):
+def workspace_files(u=Depends(current)):
     out = []
 
-    for p in WORKSPACE.rglob("*"):
-        if p.is_file() and "__pycache__" not in p.parts:
+    for path in WORKSPACE.rglob("*"):
+        if path.is_file() and "__pycache__" not in path.parts:
             out.append({
-                "path": str(p.relative_to(WORKSPACE)).replace("\\", "/"),
-                "size": p.stat().st_size
+                "path": str(
+                    path.relative_to(WORKSPACE)
+                ).replace("\\", "/"),
+                "size": path.stat().st_size
             })
 
-    return sorted(out, key=lambda x: x["path"])
+    return sorted(
+        out,
+        key=lambda item: item["path"]
+    )
 
 
 @app.get("/api/workspace/file")
 def read_file(path: str, u=Depends(current)):
-    p = safe_path(path)
+    target = safe_path(path)
 
-    if not p.is_file():
-        raise HTTPException(404, "File not found.")
+    if not target.is_file():
+        raise HTTPException(
+            404,
+            "File not found."
+        )
 
     return {
         "path": path,
-        "content": p.read_text(
+        "content": target.read_text(
             encoding="utf-8",
             errors="replace"
         )
@@ -1184,13 +1258,26 @@ def read_file(path: str, u=Depends(current)):
 @app.post("/api/workspace/file")
 def write_file(req: FileReq, u=Depends(current)):
     if req.content is None:
-        raise HTTPException(400, "Content is required.")
+        raise HTTPException(
+            400,
+            "Content is required."
+        )
 
-    p = safe_path(req.path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(req.content, encoding="utf-8")
+    target = safe_path(req.path)
+    target.parent.mkdir(
+        parents=True,
+        exist_ok=True
+    )
 
-    return {"ok": True, "path": req.path}
+    target.write_text(
+        req.content,
+        encoding="utf-8"
+    )
+
+    return {
+        "ok": True,
+        "path": req.path
+    }
 
 
 # =========================================================
@@ -1199,17 +1286,29 @@ def write_file(req: FileReq, u=Depends(current)):
 
 @app.post("/api/projects")
 def project(req: ProjectReq, u=Depends(current)):
-    if not re.fullmatch(r"[A-Za-z0-9_-]+", req.name):
-        raise HTTPException(400, "Invalid project name.")
+    if not re.fullmatch(
+        r"[A-Za-z0-9_-]+",
+        req.name
+    ):
+        raise HTTPException(
+            400,
+            "Invalid project name."
+        )
 
-    p = WORKSPACE / req.name
+    target = WORKSPACE / req.name
 
-    if p.exists():
-        raise HTTPException(409, "Project already exists.")
+    if target.exists():
+        raise HTTPException(
+            409,
+            "Project already exists."
+        )
 
-    p.mkdir(parents=True)
+    target.mkdir(parents=True)
 
-    return {"ok": True, "name": req.name}
+    return {
+        "ok": True,
+        "name": req.name
+    }
 
 
 @app.post("/api/auto-fix")
@@ -1249,7 +1348,12 @@ def admin_stats(u=Depends(admin)):
     ).fetchone()["n"]
 
     usage_total = c.execute(
-        "SELECT COALESCE(SUM(input_chars+output_chars),0) n FROM usage"
+        """
+        SELECT COALESCE(
+            SUM(input_chars+output_chars),0
+        ) n
+        FROM usage
+        """
     ).fetchone()["n"]
 
     logs_total = c.execute(
@@ -1284,25 +1388,33 @@ def admin_keys(u=Depends(admin)):
     ).fetchall()
 
     c.close()
-    return [dict(r) for r in rows]
+
+    return [dict(row) for row in rows]
 
 
 @app.post("/api/admin/keys")
 def add_key(req: KeyReq, u=Depends(admin)):
     if not req.key.strip():
-        raise HTTPException(400, "API key required.")
+        raise HTTPException(
+            400,
+            "API key required."
+        )
 
     c = conn()
 
     c.execute(
         """
-        INSERT INTO api_keys(label,key_hash,key_cipher,active,created_at)
+        INSERT INTO api_keys(
+            label,key_hash,key_cipher,active,created_at
+        )
         VALUES(?,?,?,?,?)
         """,
         (
             req.label,
             hashlib.sha256(req.key.encode()).hexdigest(),
-            FERNET.encrypt(req.key.strip().encode()).decode(),
+            FERNET.encrypt(
+                req.key.strip().encode()
+            ).decode(),
             1,
             now()
         )
@@ -1318,18 +1430,24 @@ def add_key(req: KeyReq, u=Depends(admin)):
 def toggle_key(key_id: int, u=Depends(admin)):
     c = conn()
 
-    r = c.execute(
+    row = c.execute(
         "SELECT active FROM api_keys WHERE id=?",
         (key_id,)
     ).fetchone()
 
-    if not r:
+    if not row:
         c.close()
-        raise HTTPException(404, "Key not found.")
+        raise HTTPException(
+            404,
+            "Key not found."
+        )
 
     c.execute(
         "UPDATE api_keys SET active=? WHERE id=?",
-        (0 if r["active"] else 1, key_id)
+        (
+            0 if row["active"] else 1,
+            key_id
+        )
     )
 
     c.commit()
@@ -1360,15 +1478,27 @@ def remove_key(key_id: int, u=Depends(admin)):
 @app.get("/api/admin/settings")
 def settings(u=Depends(admin)):
     return {
-        "model": get_setting("model", MODEL_DEFAULT),
-        "system_prompt": get_setting("system_prompt", SYSTEM_PROMPT)
+        "model": get_setting(
+            "model",
+            MODEL_DEFAULT
+        ),
+        "system_prompt": get_setting(
+            "system_prompt",
+            SYSTEM_PROMPT
+        )
     }
 
 
 @app.put("/api/admin/settings")
 def update_setting(req: SettingReq, u=Depends(admin)):
-    if req.name not in {"model", "system_prompt"}:
-        raise HTTPException(400, "Unsupported setting.")
+    if req.name not in {
+        "model",
+        "system_prompt"
+    }:
+        raise HTTPException(
+            400,
+            "Unsupported setting."
+        )
 
     c = conn()
 
@@ -1376,9 +1506,13 @@ def update_setting(req: SettingReq, u=Depends(admin)):
         """
         INSERT INTO settings(name,value)
         VALUES(?,?)
-        ON CONFLICT(name) DO UPDATE SET value=excluded.value
+        ON CONFLICT(name)
+        DO UPDATE SET value=excluded.value
         """,
-        (req.name, req.value)
+        (
+            req.name,
+            req.value
+        )
     )
 
     c.commit()
@@ -1405,7 +1539,8 @@ def logs(u=Depends(admin)):
     ).fetchall()
 
     c.close()
-    return [dict(r) for r in rows]
+
+    return [dict(row) for row in rows]
 
 
 # =========================================================
@@ -1425,25 +1560,32 @@ def users(u=Depends(admin)):
     ).fetchall()
 
     c.close()
-    return [dict(r) for r in rows]
+
+    return [dict(row) for row in rows]
 
 
 @app.patch("/api/admin/users/{user_id}/toggle")
 def toggle_user(user_id: int, u=Depends(admin)):
     c = conn()
 
-    r = c.execute(
+    row = c.execute(
         "SELECT active FROM users WHERE id=?",
         (user_id,)
     ).fetchone()
 
-    if not r:
+    if not row:
         c.close()
-        raise HTTPException(404, "User not found.")
+        raise HTTPException(
+            404,
+            "User not found."
+        )
 
     c.execute(
         "UPDATE users SET active=? WHERE id=?",
-        (0 if r["active"] else 1, user_id)
+        (
+            0 if row["active"] else 1,
+            user_id
+        )
     )
 
     c.commit()
@@ -1458,24 +1600,32 @@ def reset_password(user_id: int, u=Depends(admin)):
 
     c = conn()
 
-    r = c.execute(
+    row = c.execute(
         "SELECT id FROM users WHERE id=?",
         (user_id,)
     ).fetchone()
 
-    if not r:
+    if not row:
         c.close()
-        raise HTTPException(404, "User not found.")
+        raise HTTPException(
+            404,
+            "User not found."
+        )
 
     c.execute(
         "UPDATE users SET password_hash=? WHERE id=?",
-        (pwd.hash(new_password), user_id)
+        (
+            pwd.hash(new_password),
+            user_id
+        )
     )
 
     c.commit()
     c.close()
 
-    return {"temporary_password": new_password}
+    return {
+        "temporary_password": new_password
+    }
 
 
 # =========================================================
@@ -1498,7 +1648,8 @@ def usage(u=Depends(admin)):
     """).fetchall()
 
     c.close()
-    return [dict(r) for r in rows]
+
+    return [dict(row) for row in rows]
 
 
 # =========================================================
