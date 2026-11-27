@@ -17,7 +17,9 @@ import {
   UserCircle,
   Settings,
   Upload,
-  CheckCircle
+  CheckCircle,
+  Download,
+  FileText
 } from 'lucide-react'
 import './styles.css'
 
@@ -636,12 +638,39 @@ function TypingIndicator() {
    MESSAGE BUBBLE
 ========================= */
 
+function parseGeneratedFiles(raw = '') {
+  const files = []
+  const pattern = /<FILE\s+path=["\']([^"\']+)["\']\s*>([\s\S]*?)<\/FILE>/gi
+  let match
+  while ((match = pattern.exec(raw)) !== null) {
+    files.push({ path: match[1].trim(), content: match[2].trim() })
+  }
+  const content = raw
+    .replace(pattern, '')
+    .replace(/<\/?FILE(?:\s+[^>]*)?>/gi, '')
+    .trim()
+  return { content, files }
+}
+
+function downloadGeneratedFile(file) {
+  const blob = new Blob([file.content], { type: 'text/plain;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = file.path.replaceAll('/', '__') || 'generated-file.txt'
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
 function MessageBubble({
   message,
   index
 }) {
-  const isAI =
-    message.role === 'assistant'
+  const isAI = message.role === 'assistant'
+  const parsed = isAI ? parseGeneratedFiles(message.content || '') : { content: message.content || '', files: [] }
+  const files = message.files?.length ? message.files : parsed.files
 
   return (
     <div
@@ -665,11 +694,34 @@ function MessageBubble({
       </div>
 
       <div className="content">
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
-        >
-          {message.content}
-        </ReactMarkdown>
+        {parsed.content && (
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            {parsed.content}
+          </ReactMarkdown>
+        )}
+
+        {isAI && files.length > 0 && (
+          <div className="generated-files">
+            <div className="generated-files-heading">
+              <span><FileText size={16} /> Generated files</span>
+              <small>{files.length} {files.length === 1 ? 'file' : 'files'}</small>
+            </div>
+            {files.map((file, fileIndex) => (
+              <div className="generated-file" key={`${file.path}-${fileIndex}`}>
+                <div className="generated-file-info">
+                  <FileText size={18} />
+                  <div>
+                    <b>{file.path}</b>
+                    <small>{new Blob([file.content || '']).size.toLocaleString()} bytes</small>
+                  </div>
+                </div>
+                <button type="button" className="generated-file-download" onClick={() => downloadGeneratedFile(file)} aria-label={`Download ${file.path}`}>
+                  <Download size={16} /> Download
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
 
         {isAI && (
           <div className="message-glow" />
@@ -748,24 +800,67 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (user) {
-      loadChats().then(async (items) => {
-        const savedId = localStorage.getItem(`ng_active_chat_${user.id}`)
-        if (savedId && items.some(item => String(item.id) === savedId)) {
-          await openChat(Number(savedId))
-        }
-      })
+    if (!user) return
+
+    // Show the last known conversation list immediately while the database loads.
+    const cacheKey = `ng_chat_list_${user.id}`
+    let cachedChats = []
+    try {
+      const saved = JSON.parse(localStorage.getItem(cacheKey) || '[]')
+      if (Array.isArray(saved)) cachedChats = saved
+    } catch (e) {
+      console.warn('Could not read cached conversations:', e)
+    }
+    if (cachedChats.length) setChats(cachedChats)
+
+    loadChats().then(async (items) => {
+      const savedId = localStorage.getItem(`ng_active_chat_${user.id}`)
+      if (savedId && items.some(item => String(item.id) === savedId)) {
+        await openChat(Number(savedId))
+      }
+    })
+
+    // Refresh when the user returns to the tab, without clearing the list on a transient failure.
+    const refreshChats = () => {
+      if (document.visibilityState === 'visible') loadChats()
+    }
+    window.addEventListener('focus', refreshChats)
+    document.addEventListener('visibilitychange', refreshChats)
+    return () => {
+      window.removeEventListener('focus', refreshChats)
+      document.removeEventListener('visibilitychange', refreshChats)
     }
   }, [user])
 
   async function loadChats() {
+    const cacheKey = user?.id ? `ng_chat_list_${user.id}` : null
+    let cachedChats = []
+    if (cacheKey) {
+      try {
+        const saved = JSON.parse(localStorage.getItem(cacheKey) || '[]')
+        if (Array.isArray(saved)) cachedChats = saved
+      } catch (e) {
+        console.warn('Could not read cached conversations:', e)
+      }
+    }
+
     try {
       const items = await api('/api/chats')
+      if (!Array.isArray(items)) throw Error('Invalid conversation list response')
+
+      // A temporary empty response must not erase a previously populated sidebar.
+      if (items.length === 0 && cachedChats.length > 0) {
+        setChats(current => current.length ? current : cachedChats)
+        return cachedChats
+      }
+
       setChats(items)
+      if (cacheKey) localStorage.setItem(cacheKey, JSON.stringify(items))
       return items
     } catch (e) {
-      console.error(e)
-      return []
+      console.error('Could not refresh conversations; keeping the last saved list.', e)
+      if (cachedChats.length) setChats(current => current.length ? current : cachedChats)
+      return cachedChats
     }
   }
 
