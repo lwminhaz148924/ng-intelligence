@@ -28,6 +28,24 @@ const API =
 
 const token = () => localStorage.getItem('ng_token')
 
+// Keep provider and infrastructure details private. Only NG INTELLIGENCE's
+// own user-safe language is allowed to reach the interface.
+function brandedErrorMessage(message, status = 0) {
+  const raw = String(message || '').toLowerCase()
+  if (status === 401 || raw.includes('invalid email or password')) return 'আপনার ইমেইল অথবা পাসওয়ার্ড সঠিক নয়। আবার চেষ্টা করুন।'
+  if (status === 403 || raw.includes('account is disabled')) return 'এই অ্যাকাউন্টে প্রবেশ করা যাচ্ছে না। সহায়তার জন্য NG INTELLIGENCE সাপোর্টের সঙ্গে যোগাযোগ করুন।'
+  if (status === 404 && raw.includes('chat')) return 'কথোপকথনটি খুঁজে পাওয়া যায়নি। পেজটি রিফ্রেশ করে আবার চেষ্টা করুন।'
+  if (status === 429 || raw.includes('too many requests')) return 'আপনি অল্প সময়ে অনেকগুলো অনুরোধ পাঠিয়েছেন। কিছুক্ষণ অপেক্ষা করে আবার চেষ্টা করুন।'
+  if (status >= 500 || !message || /gemini|google|provider|api key|candidate|finishreason|max_tokens|model|upstream|internal server|network|fetch failed/i.test(raw)) {
+    return 'NG INTELLIGENCE এই মুহূর্তে আপনার অনুরোধটি সম্পন্ন করতে পারছে না। অনুগ্রহ করে একটু পরে আবার চেষ্টা করুন।'
+  }
+  // Do not expose technical exception text, stack traces, or provider names.
+  if (/exception|traceback|http|sql|database|connection|timeout|502|503|504/i.test(raw)) {
+    return 'একটি সাময়িক সমস্যা হয়েছে। অনুগ্রহ করে আবার চেষ্টা করুন।'
+  }
+  return String(message)
+}
+
 async function api(path, opt = {}) {
   const headers = {
     'Content-Type': 'application/json',
@@ -46,7 +64,7 @@ async function api(path, opt = {}) {
   const d = await r.json().catch(() => ({}))
 
   if (!r.ok) {
-    throw Error(d.detail || 'Request failed')
+    throw Error(brandedErrorMessage(d.detail || 'Request failed', r.status))
   }
 
   return d
@@ -997,7 +1015,7 @@ function App() {
       await progressTask
       setContinuationStatus('')
       setRevealing(false)
-      setMsgs(m => [...m, { role: 'assistant', content: '**Request failed:** ' + e.message }])
+      setMsgs(m => [...m, { role: 'assistant', content: '**NG INTELLIGENCE**\n\n' + brandedErrorMessage(e.message) }])
     } finally {
       polling = false
       setContinuationStatus('')
