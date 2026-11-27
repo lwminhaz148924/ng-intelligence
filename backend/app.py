@@ -680,7 +680,7 @@ def keys():
     return list(ai_config()[0])
 
 
-def gemini(prompt):
+def gemini(prompt, history=None):
     active, model, base_system_prompt = ai_config()
 
     if not active:
@@ -702,6 +702,10 @@ RESPONSE AND FILE OUTPUT RULES:
 - When the user asks you to create, build, write, or modify code/project files, return every complete file using exactly <FILE path=\"relative/path.ext\"> followed by the full file content and then </FILE>.
 - Put a short explanation outside the file blocks. Do not wrap a FILE block in Markdown code fences.
 - Do not omit files needed for the requested working project.
+- When code is requested, provide complete, production-minded code at the length the task genuinely requires. Do not deliberately make code short just to save tokens.
+- Never use placeholders such as "...", "rest of code", "same as above", TODO stubs, or pseudocode in place of requested implementation.
+- When modifying an existing file, return the entire updated file, not only a patch or a few changed functions.
+- Include all required imports, configuration, error handling, and supporting files. Explain any unavoidable limitation instead of silently omitting code.
 - Never claim that files have been saved to the user's device; the interface will provide downloadable file attachments.
 """
 
@@ -712,6 +716,14 @@ RESPONSE AND FILE OUTPUT RULES:
                     ]
                 },
                 "contents": [
+                    *[
+                        {
+                            "role": item["role"],
+                            "parts": [{"text": item["content"]}]
+                        }
+                        for item in (history or [])
+                        if item.get("role") in ("user", "model") and item.get("content")
+                    ],
                     {
                         "role": "user",
                         "parts": [{"text": prompt}]
@@ -719,7 +731,7 @@ RESPONSE AND FILE OUTPUT RULES:
                 ],
                 "generationConfig": {
                     "temperature": 0.3,
-                    "maxOutputTokens": 8192
+                    "maxOutputTokens": 16384
                 }
             }
 
@@ -1348,6 +1360,31 @@ def chat(request: Request, req: ChatReq, u=Depends(current)):
         ).fetchone()
         chat_id = created_chat["id"]
 
+    # Load only the latest 12 messages from THIS conversation, before saving
+    # the current message, so the AI can follow the immediate discussion.
+    # Older chat history remains stored and visible in the website as before.
+    history_rows = c.execute(
+        """
+        SELECT role,content FROM messages
+        WHERE chat_id=?
+        ORDER BY id DESC
+        LIMIT 12
+        """,
+        (chat_id,)
+    ).fetchall()
+    history_rows.reverse()
+    conversation_context = []
+    for row in history_rows:
+        role = "model" if row["role"] == "assistant" else "user"
+        content = (row["content"] or "").strip()
+        if not content:
+            continue
+        # Bound individual turns to prevent one huge pasted file from
+        # consuming the entire prompt window while preserving recent context.
+        if len(content) > 6000:
+            content = content[-6000:]
+        conversation_context.append({"role": role, "content": content})
+
     c.execute(
         """
         INSERT INTO messages(chat_id,role,content,created_at)
@@ -1356,14 +1393,11 @@ def chat(request: Request, req: ChatReq, u=Depends(current)):
         (chat_id, "user", message_text, now())
     )
 
-    # Save the user's message to the database, but do not load or send
-    # previous conversation messages to Gemini. Only the current request
-    # is included in the AI prompt to keep input tokens and latency lower.
     c.commit()
     c.close()
 
     try:
-        answer, model, keylabel = gemini(message_text)
+        answer, model, keylabel = gemini(message_text, conversation_context)
     except HTTPException as error:
         log(u["id"], "chat", "error", str(error.detail))
         raise
