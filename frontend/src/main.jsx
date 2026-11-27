@@ -71,22 +71,86 @@ function Auth({ done }) {
   const [mode, setMode] = useState('login')
   const [email, setEmail] = useState('')
   const [pass, setPass] = useState('')
+  const [code, setCode] = useState('')
+  const [newPass, setNewPass] = useState('')
   const [err, setErr] = useState('')
+  const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
+
+  function switchMode(next) {
+    setMode(next)
+    setErr('')
+    setNotice('')
+    setCode('')
+    setPass('')
+    setNewPass('')
+  }
 
   async function submit(e) {
     e.preventDefault()
-
     setBusy(true)
     setErr('')
+    setNotice('')
 
     try {
-      const d = await api('/api/auth/' + mode, {
-        method: 'POST',
-        body: JSON.stringify({
-          email,
-          password: pass
+      if (mode === 'register') {
+        const d = await api('/api/auth/register', {
+          method: 'POST',
+          body: JSON.stringify({ email, password: pass })
         })
+
+        if (d.verification_required) {
+          setNotice(d.message || 'Verification code sent to your email.')
+          setCode('')
+          setMode('verify')
+          return
+        }
+      }
+
+      if (mode === 'verify') {
+        const d = await api('/api/auth/verify', {
+          method: 'POST',
+          body: JSON.stringify({ email, code })
+        })
+
+        localStorage.setItem('ng_token', d.token)
+        done(d.user)
+        return
+      }
+
+      if (mode === 'forgot') {
+        const d = await api('/api/auth/forgot-password', {
+          method: 'POST',
+          body: JSON.stringify({ email })
+        })
+
+        setNotice(d.message || 'If a verified account exists, a reset code has been sent.')
+        setCode('')
+        setMode('reset')
+        return
+      }
+
+      if (mode === 'reset') {
+        const d = await api('/api/auth/reset-password', {
+          method: 'POST',
+          body: JSON.stringify({
+            email,
+            code,
+            new_password: newPass
+          })
+        })
+
+        setNotice(d.message || 'Password reset successfully. You can now sign in.')
+        setPass('')
+        setNewPass('')
+        setCode('')
+        setMode('login')
+        return
+      }
+
+      const d = await api('/api/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({ email, password: pass })
       })
 
       localStorage.setItem('ng_token', d.token)
@@ -98,6 +162,40 @@ function Auth({ done }) {
     }
   }
 
+  async function resendVerification() {
+    setBusy(true)
+    setErr('')
+    setNotice('')
+
+    try {
+      const d = await api('/api/auth/resend-verification', {
+        method: 'POST',
+        body: JSON.stringify({ email })
+      })
+      setNotice(d.message || 'A new verification code has been sent.')
+    } catch (x) {
+      setErr(x.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const title = {
+    login: 'Welcome back.',
+    register: 'Start building.',
+    verify: 'Verify your email.',
+    forgot: 'Forgot your password?',
+    reset: 'Set a new password.'
+  }[mode]
+
+  const description = {
+    login: 'Sign in to continue to your intelligent workspace.',
+    register: 'Create a private NG INTELLIGENCE account.',
+    verify: `Enter the 6-digit code sent to ${email}.`,
+    forgot: 'Enter your email and we will send a password reset code.',
+    reset: `Enter the 6-digit code sent to ${email}, then choose a new password.`
+  }[mode]
+
   return (
     <div className="auth">
       <div className="glow g1" />
@@ -108,52 +206,81 @@ function Auth({ done }) {
 
         <div className="authcopy">
           <span className="eyebrow">
-            {mode === 'login'
-              ? 'PRIVATE AI WORKSPACE'
-              : 'CREATE YOUR WORKSPACE'}
+            {mode === 'verify' || mode === 'reset'
+              ? 'SECURE ACCOUNT'
+              : mode === 'login'
+                ? 'PRIVATE AI WORKSPACE'
+                : mode === 'forgot'
+                  ? 'ACCOUNT RECOVERY'
+                  : 'CREATE YOUR WORKSPACE'}
           </span>
 
-          <h1>
-            {mode === 'login'
-              ? 'Welcome back.'
-              : 'Start building.'}
-          </h1>
-
-          <p>
-            {mode === 'login'
-              ? 'Sign in to continue to your intelligent workspace.'
-              : 'Create a private NG INTELLIGENCE account.'}
-          </p>
+          <h1>{title}</h1>
+          <p>{description}</p>
         </div>
 
+        {notice && <div className="success">{notice}</div>}
+        {err && <div className="error">{err}</div>}
+
         <form onSubmit={submit}>
-          <label>
-            Email
-            <input
-              type="email"
-              value={email}
-              onChange={e => setEmail(e.target.value)}
-              placeholder="you@example.com"
-              required
-            />
-          </label>
+          {(mode === 'login' || mode === 'register' || mode === 'forgot') && (
+            <label>
+              Email
+              <input
+                type="email"
+                value={email}
+                onChange={e => setEmail(e.target.value)}
+                placeholder="you@example.com"
+                autoComplete="email"
+                required
+              />
+            </label>
+          )}
 
-          <label>
-            Password
-            <input
-              type="password"
-              value={pass}
-              onChange={e => setPass(e.target.value)}
-              placeholder="Minimum 8 characters"
-              minLength="8"
-              required
-            />
-          </label>
+          {(mode === 'login' || mode === 'register') && (
+            <label>
+              Password
+              <input
+                type="password"
+                value={pass}
+                onChange={e => setPass(e.target.value)}
+                placeholder="Minimum 8 characters"
+                minLength="8"
+                autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+                required
+              />
+            </label>
+          )}
 
-          {err && (
-            <div className="error">
-              {err}
-            </div>
+          {(mode === 'verify' || mode === 'reset') && (
+            <label>
+              Verification code
+              <input
+                className="codeinput"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                maxLength="6"
+                value={code}
+                onChange={e => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                placeholder="000000"
+                required
+              />
+            </label>
+          )}
+
+          {mode === 'reset' && (
+            <label>
+              New password
+              <input
+                type="password"
+                value={newPass}
+                onChange={e => setNewPass(e.target.value)}
+                placeholder="Minimum 8 characters"
+                minLength="8"
+                autoComplete="new-password"
+                required
+              />
+            </label>
           )}
 
           <button
@@ -165,34 +292,91 @@ function Auth({ done }) {
               ? 'Please wait…'
               : mode === 'login'
                 ? 'Sign in'
-                : 'Create account'}
+                : mode === 'register'
+                  ? 'Create account'
+                  : mode === 'verify'
+                    ? 'Verify email'
+                    : mode === 'forgot'
+                      ? 'Send reset code'
+                      : 'Reset password'}
           </button>
         </form>
 
-        <div className="switch">
-          {mode === 'login'
-            ? 'New to NG INTELLIGENCE?'
-            : 'Already have an account?'}
+        {mode === 'verify' && (
+          <div className="authactions">
+            <button
+              type="button"
+              onClick={resendVerification}
+              disabled={busy}
+            >
+              Resend verification code
+            </button>
+            <button
+              type="button"
+              onClick={() => switchMode('register')}
+              disabled={busy}
+            >
+              Use another email
+            </button>
+          </div>
+        )}
 
-          <button
-            onClick={() =>
-              setMode(
-                mode === 'login'
-                  ? 'register'
-                  : 'login'
-              )
-            }
-          >
-            {mode === 'login'
-              ? 'Create account'
-              : 'Sign in'}
-          </button>
-        </div>
+        {mode === 'reset' && (
+          <div className="authactions">
+            <button
+              type="button"
+              onClick={async () => {
+                setBusy(true)
+                setErr('')
+                setNotice('')
+                try {
+                  const d = await api('/api/auth/forgot-password', {
+                    method: 'POST',
+                    body: JSON.stringify({ email })
+                  })
+                  setNotice(d.message || 'A new reset code has been sent.')
+                } catch (x) {
+                  setErr(x.message)
+                } finally {
+                  setBusy(false)
+                }
+              }}
+              disabled={busy}
+            >
+              Resend reset code
+            </button>
+            <button type="button" onClick={() => switchMode('login')} disabled={busy}>
+              Back to sign in
+            </button>
+          </div>
+        )}
+
+        {(mode === 'login' || mode === 'register') && (
+          <div className="authlinks">
+            {mode === 'login' && (
+              <button type="button" onClick={() => switchMode('forgot')}>
+                Forgot password?
+              </button>
+            )}
+
+            <div className="switch">
+              {mode === 'login'
+                ? 'New to NG INTELLIGENCE?'
+                : 'Already have an account?'}
+
+              <button
+                type="button"
+                onClick={() => switchMode(mode === 'login' ? 'register' : 'login')}
+              >
+                {mode === 'login' ? 'Create account' : 'Sign in'}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )
 }
-
 /* =========================
    ADMIN
 ========================= */
@@ -615,7 +799,7 @@ function MessageBubble({
         {isAI ? 'N' : 'U'}
       </div>
 
-      <div className="content">
+      <div className="content premium-text">
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
         >
@@ -638,6 +822,7 @@ function App() {
   const [user, setUser] =
     useState(null)
   const messagesEndRef = useRef(null)
+  const inputRef = useRef(null)
 
   const [side, setSide] =
     useState(true)
@@ -720,6 +905,9 @@ function App() {
     }
 
     setInput('')
+    if (inputRef.current) {
+      inputRef.current.style.height = '45px'
+    }
 
     setMsgs(m => [
       ...m,
@@ -945,9 +1133,11 @@ function App() {
 
           {/* COMPOSER */}
 
-          <div className="composer">
+          {!busy && (
+            <div className="composer">
 
             <textarea
+              ref={inputRef}
               value={input}
               onChange={e =>
                 setInput(
@@ -998,7 +1188,8 @@ function App() {
                 <Send size={18} />
               )}
             </button>
-          </div>
+            </div>
+          )}
 
         </main>
       </div>
