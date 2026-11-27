@@ -270,6 +270,11 @@ def init():
             "ALTER TABLE users ADD COLUMN is_verified INTEGER NOT NULL DEFAULT 1"
         )
 
+    if "avatar_data" not in columns:
+        c.execute(
+            "ALTER TABLE users ADD COLUMN avatar_data TEXT"
+        )
+
     if ADMIN_EMAIL and ADMIN_PASSWORD:
         admin_email = ADMIN_EMAIL.lower()
 
@@ -331,6 +336,14 @@ class PasswordResetReq(BaseModel):
     email: EmailStr
     code: str
     new_password: str
+
+
+class ProfileReq(BaseModel):
+    avatar_data: Optional[str] = None
+
+
+class BrandingReq(BaseModel):
+    logo_data: Optional[str] = None
 
 
 class ChatReq(BaseModel):
@@ -877,7 +890,8 @@ def verify_email(request: Request, req: VerifyReq):
         "user": {
             "id": verified_user["id"],
             "email": verified_user["email"],
-            "role": verified_user["role"]
+            "role": verified_user["role"],
+            "avatar_data": verified_user.get("avatar_data")
         },
         "message": "Email verified successfully."
     }
@@ -1091,9 +1105,24 @@ def login(request: Request, a: Auth):
         "user": {
             "id": u["id"],
             "email": u["email"],
-            "role": u["role"]
+            "role": u["role"],
+            "avatar_data": u.get("avatar_data")
         }
     }
+
+
+# =========================================================
+# PROFILE / BRANDING HELPERS
+# =========================================================
+
+def validate_image_data(value: Optional[str], label: str):
+    if value is None or value == "":
+        return value
+    if not value.startswith("data:image/"):
+        raise HTTPException(400, f"Invalid {label} image format.")
+    if len(value) > 2_800_000:
+        raise HTTPException(400, f"{label.title()} image is too large. Maximum is 2 MB.")
+    return value
 
 
 # =========================================================
@@ -1105,8 +1134,25 @@ def me(u=Depends(current)):
     return {
         "id": u["id"],
         "email": u["email"],
-        "role": u["role"]
+        "role": u["role"],
+        "avatar_data": u.get("avatar_data")
     }
+
+
+@app.put("/api/profile")
+def update_profile(req: ProfileReq, u=Depends(current)):
+    avatar = validate_image_data(req.avatar_data, "profile")
+    c = conn()
+    c.execute("UPDATE users SET avatar_data=? WHERE id=?", (avatar, u["id"]))
+    c.commit()
+    updated = c.execute("SELECT id,email,role,avatar_data FROM users WHERE id=?", (u["id"],)).fetchone()
+    c.close()
+    return {"ok": True, "user": dict(updated)}
+
+
+@app.get("/api/branding")
+def branding():
+    return {"logo_data": get_setting("site_logo", "")}
 
 
 # =========================================================
@@ -1459,6 +1505,29 @@ def toggle_key(key_id: int, u=Depends(admin)):
 def remove_key(key_id: int, u=Depends(admin)):
     c = conn()
     c.execute("DELETE FROM api_keys WHERE id=?", (key_id,))
+    c.commit()
+    c.close()
+    return {"ok": True}
+
+
+# =========================================================
+# ADMIN BRANDING
+# =========================================================
+
+@app.get("/api/admin/branding")
+def admin_branding(u=Depends(admin)):
+    return {"logo_data": get_setting("site_logo", "")}
+
+
+@app.put("/api/admin/branding")
+def update_branding(req: BrandingReq, u=Depends(admin)):
+    logo = validate_image_data(req.logo_data, "logo")
+    c = conn()
+    c.execute(
+        """INSERT INTO settings(name,value) VALUES(?,?)
+           ON CONFLICT(name) DO UPDATE SET value=excluded.value""",
+        ("site_logo", logo or "")
+    )
     c.commit()
     c.close()
     return {"ok": True}
