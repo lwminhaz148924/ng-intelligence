@@ -638,6 +638,13 @@ function App() {
   const [user, setUser] =
     useState(null)
   const messagesEndRef = useRef(null)
+  const touchStartY = useRef(0)
+
+  function showDashboardOnScrollUp() {
+    if (cid && !side) {
+      setSide(true)
+    }
+  }
 
   const [side, setSide] =
     useState(true)
@@ -916,7 +923,24 @@ function App() {
                 }
               />
             ) : (
-              <div className="messages">
+              <div
+                className="messages"
+                onWheel={e => {
+                  if (e.deltaY < -12) {
+                    showDashboardOnScrollUp()
+                  }
+                }}
+                onTouchStart={e => {
+                  touchStartY.current = e.touches[0].clientY
+                }}
+                onTouchEnd={e => {
+                  const touchEndY = e.changedTouches[0].clientY
+
+                  if (touchEndY - touchStartY.current > 50) {
+                    showDashboardOnScrollUp()
+                  }
+                }}
+              >
 
                 {msgs.map(
                   (m, i) => (
