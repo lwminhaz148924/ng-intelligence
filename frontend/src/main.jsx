@@ -626,6 +626,7 @@ function TypingIndicator({ siteLogo }) {
       </div>
 
       <div className="typingbubble">
+        <span className="typinglabel">Thinking</span>
         <span className="typingdot" />
         <span className="typingdot" />
         <span className="typingdot" />
@@ -782,6 +783,7 @@ function App() {
 
   const [busy, setBusy] =
     useState(false)
+  const [revealing, setRevealing] = useState(false)
 
   const [admin, setAdmin] =
     useState(false)
@@ -790,11 +792,11 @@ function App() {
   useEffect(() => {
     if (msgs.length > 0 || busy) {
       messagesEndRef.current?.scrollIntoView({
-        behavior: 'smooth',
+        behavior: revealing ? 'auto' : 'smooth',
         block: 'end'
       })
     }
-  }, [msgs.length, busy])
+  }, [msgs, busy, revealing])
 
   useEffect(() => {
     if (token()) {
@@ -889,58 +891,57 @@ function App() {
   }
 
   async function send() {
-    const text =
-      input.trim()
-
-    if (!text || busy) {
-      return
-    }
+    const text = input.trim()
+    if (!text || busy) return
 
     setInput('')
-
-    setMsgs(m => [
-      ...m,
-      {
-        role: 'user',
-        content: text
-      }
-    ])
-
+    setMsgs(m => [...m, { role: 'user', content: text }])
     setBusy(true)
+    setRevealing(false)
 
     try {
-      const d =
-        await api('/api/chat', {
-          method: 'POST',
-          body: JSON.stringify({
-            message: text,
-            chat_id: cid
-          })
-        })
+      const d = await api('/api/chat', {
+        method: 'POST',
+        body: JSON.stringify({ message: text, chat_id: cid })
+      })
 
       setCid(d.chat_id)
       if (user?.id) localStorage.setItem(`ng_active_chat_${user.id}`, String(d.chat_id))
 
-      setMsgs(m => [
-        ...m,
-        {
-          role: 'assistant',
-          content: d.answer
-        }
-      ])
+      const fullAnswer = String(d.answer || '')
+      setRevealing(true)
+      setMsgs(m => [...m, { role: 'assistant', content: '' }])
 
+      // Reveal the completed answer in small chunks, similar to live typing.
+      // The server still saves the complete response, so refreshing the chat
+      // always restores the exact full message and generated-file blocks.
+      const chunkSize = Math.max(3, Math.ceil(fullAnswer.length / 700))
+      for (let index = 0; index < fullAnswer.length; index += chunkSize) {
+        const visible = fullAnswer.slice(0, index + chunkSize)
+        setMsgs(current => {
+          const next = [...current]
+          const last = next[next.length - 1]
+          if (last?.role === 'assistant') {
+            next[next.length - 1] = { ...last, content: visible }
+          }
+          return next
+        })
+        await new Promise(resolve => window.setTimeout(resolve, 12))
+      }
+
+      // Ensure even an empty/very short provider response settles correctly.
+      setMsgs(current => {
+        const next = [...current]
+        const last = next[next.length - 1]
+        if (last?.role === 'assistant') next[next.length - 1] = { ...last, content: fullAnswer }
+        return next
+      })
       loadChats()
     } catch (e) {
-      setMsgs(m => [
-        ...m,
-        {
-          role: 'assistant',
-          content:
-            '**Request failed:** ' +
-            e.message
-        }
-      ])
+      setRevealing(false)
+      setMsgs(m => [...m, { role: 'assistant', content: '**Request failed:** ' + e.message }])
     } finally {
+      setRevealing(false)
       setBusy(false)
     }
   }
@@ -1108,7 +1109,7 @@ function App() {
                   )
                 )}
 
-                {busy && (
+                {busy && !revealing && (
                   <TypingIndicator siteLogo={siteLogo} />
                 )}
 
