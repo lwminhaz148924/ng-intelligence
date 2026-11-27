@@ -1573,3 +1573,108 @@ main { min-width: 0; flex: 1; position: relative; }
   .otpinput { font-size: 21px !important; letter-spacing: 6px; }
   .profile-card { padding:18px; border-radius:19px; }
 }
+
+
+/* ==========================================================
+   DESKTOP FIX: PIN HEADER + SIDEBAR, SCROLL CHAT CONTENT ONLY
+   Mobile rules above remain untouched.
+========================================================== */
+@media (min-width: 901px) {
+  html, body, #root { height: 100%; min-height: 100%; overflow: hidden; }
+  body { overflow: hidden; }
+  .app {
+    height: 100dvh;
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  .app > header {
+    position: fixed;
+    inset: 0 0 auto 0;
+    z-index: 60;
+    width: 100%;
+    height: 72px;
+    flex: 0 0 72px;
+  }
+  .layout {
+    display: flex;
+    flex: 1 1 auto;
+    min-height: 0;
+    height: calc(100dvh - 72px);
+    margin-top: 72px;
+    overflow: hidden;
+  }
+  .app.sidebar-open aside {
+    position: fixed;
+    top: 72px;
+    left: 0;
+    bottom: 0;
+    width: 276px;
+    min-width: 276px;
+    height: calc(100dvh - 72px);
+    max-height: calc(100dvh - 72px);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    z-index: 45;
+  }
+  .app.sidebar-open aside .chatlist {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  .app.sidebar-open aside .sidebottom { flex: 0 0 auto; }
+  .app main {
+    height: 100%;
+    min-height: 0;
+    margin-left: 276px;
+    overflow: hidden;
+  }
+  .app.sidebar-closed main { margin-left: 0; }
+  .app main .maininner {
+    height: 100%;
+    min-height: 0;
+    max-height: 100%;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+    padding-bottom: 170px;
+  }
+  .app.sidebar-open .composer {
+    left: calc(276px + (100vw - 276px) / 2);
+    max-width: min(860px, calc(100vw - 320px));
+  }
+  .app.sidebar-closed .composer {
+    left: 50%;
+    max-width: min(860px, calc(100vw - 48px));
+  }
+}
+
+/* OTP success feedback */
+.verify-icon.verified {
+  color: #0baf78;
+  background: linear-gradient(145deg, #e7fff5, #f4fffb);
+  border-color: #b8f1d9;
+  animation: verifiedPop .42s cubic-bezier(.2,.9,.25,1.3) both;
+}
+.verify-icon.verified svg { animation: verifiedDraw .55s ease both; }
+.verified-text {
+  color: #079968;
+  font-weight: 800;
+  animation: verifiedFade .28s ease both;
+}
+@keyframes verifiedPop {
+  0% { opacity: .35; transform: scale(.72); }
+  70% { opacity: 1; transform: scale(1.12); }
+  100% { transform: scale(1); }
+}
+@keyframes verifiedDraw {
+  from { opacity: .2; transform: rotate(-18deg) scale(.7); }
+  to { opacity: 1; transform: rotate(0) scale(1); }
+}
+@keyframes verifiedFade {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
