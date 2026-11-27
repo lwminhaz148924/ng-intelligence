@@ -626,10 +626,21 @@ def gemini(prompt):
                 f"v1beta/models/{model}:generateContent"
             )
 
+            system_prompt = get_setting("system_prompt", SYSTEM_PROMPT)
+            system_prompt += """
+
+RESPONSE AND FILE OUTPUT RULES:
+- For ordinary questions, answer normally. Never print the literal tags <FILE> or </FILE>.
+- When the user asks you to create, build, write, or modify code/project files, return every complete file using exactly <FILE path=\"relative/path.ext\"> followed by the full file content and then </FILE>.
+- Put a short explanation outside the file blocks. Do not wrap a FILE block in Markdown code fences.
+- Do not omit files needed for the requested working project.
+- Never claim that files have been saved to the user's device; the interface will provide downloadable file attachments.
+"""
+
             payload = {
                 "systemInstruction": {
                     "parts": [
-                        {"text": get_setting("system_prompt", SYSTEM_PROMPT)}
+                        {"text": system_prompt}
                     ]
                 },
                 "contents": [
@@ -683,14 +694,17 @@ def gemini(prompt):
 
 
 def extract_files(answer):
-    return [
-        {"path": path, "content": content.strip()}
-        for path, content in re.findall(
-            r'<FILE\s+path=["\']([^"\']+)["\']\s*>(.*?)</FILE>',
-            answer,
-            re.I | re.S
-        )
-    ]
+    files = []
+    for path, content in re.findall(
+        r'<FILE\s+path=["\']([^"\']+)["\']\s*>(.*?)</FILE>',
+        answer,
+        re.I | re.S
+    ):
+        path = path.strip().replace("\\", "/")
+        if not path or path.startswith("/") or ".." in path.split("/") or ":" in path:
+            continue
+        files.append({"path": path, "content": content.strip()})
+    return files
 
 
 # =========================================================
