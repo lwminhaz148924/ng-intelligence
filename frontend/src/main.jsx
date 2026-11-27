@@ -13,7 +13,11 @@ import {
   Sparkles,
   MessageSquare,
   Trash2,
-  ChevronRight
+  ChevronRight,
+  UserCircle,
+  Settings,
+  Upload,
+  CheckCircle
 } from 'lucide-react'
 import './styles.css'
 
@@ -51,10 +55,19 @@ async function api(path, opt = {}) {
 ========================= */
 
 function Brand() {
+  const [branding, setBranding] = useState(null)
+
+  useEffect(() => {
+    api('/api/branding').then(setBranding).catch(() => {})
+  }, [])
+
   return (
     <div className="brand">
-      <span className="brandmark">N</span>
-
+      {branding?.logo_data ? (
+        <img className="brandlogo" src={branding.logo_data} alt="NG INTELLIGENCE" />
+      ) : (
+        <span className="brandmark">N</span>
+      )}
       <div>
         <b>NG INTELLIGENCE</b>
         <small>INTELLIGENCE, REIMAGINED.</small>
@@ -67,315 +80,137 @@ function Brand() {
    AUTH
 ========================= */
 
+function Verification({ email, onVerified, onBack }) {
+  const [code, setCode] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const [resent, setResent] = useState(false)
+
+  async function verify(e) {
+    e.preventDefault()
+    if (!/^\d{6}$/.test(code)) return setErr('Enter the 6-digit verification code.')
+    setBusy(true)
+    setErr('')
+    try {
+      const d = await api('/api/auth/verify', {
+        method: 'POST', body: JSON.stringify({ email, code })
+      })
+      localStorage.setItem('ng_token', d.token)
+      onVerified(d.user)
+    } catch (x) {
+      setErr(x.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function resend() {
+    setBusy(true); setErr('')
+    try {
+      await api('/api/auth/resend-verification', {
+        method: 'POST', body: JSON.stringify({ email })
+      })
+      setResent(true)
+      setTimeout(() => setResent(false), 2500)
+    } catch (x) { setErr(x.message) } finally { setBusy(false) }
+  }
+
+  return (
+    <AuthShell>
+      <div className="verify-icon"><CheckCircle size={28} /></div>
+      <div className="authcopy">
+        <span className="eyebrow">VERIFY YOUR EMAIL</span>
+        <h1>Almost there.</h1>
+        <p>We sent a 6-digit verification code to <b>{email}</b>.</p>
+      </div>
+      <form onSubmit={verify}>
+        <label>Verification code
+          <input className="otpinput" inputMode="numeric" maxLength={6} value={code} onChange={e => setCode(e.target.value.replace(/\D/g,'').slice(0,6))} placeholder="000000" autoFocus required />
+        </label>
+        {busy && <div className="verify-progress"><span className="spinner" /> Verifying your email…</div>}
+        {err && <div className="error">{err}</div>}
+        {resent && <div className="success">A new verification code was sent.</div>}
+        <button className="gradientbtn authbtn" disabled={busy || code.length !== 6} type="submit">{busy ? 'Verifying…' : 'Verify email'}</button>
+      </form>
+      <div className="authlinks">
+        <button onClick={resend} disabled={busy}>Resend code</button>
+        <button onClick={onBack} disabled={busy}>Use another email</button>
+      </div>
+    </AuthShell>
+  )
+}
+
+function AuthShell({ children }) {
+  return <div className="auth"><div className="glow g1" /><div className="glow g2" /><div className="authbox"><Brand />{children}</div></div>
+}
+
 function Auth({ done }) {
   const [mode, setMode] = useState('login')
   const [email, setEmail] = useState('')
   const [pass, setPass] = useState('')
-  const [code, setCode] = useState('')
-  const [newPass, setNewPass] = useState('')
   const [err, setErr] = useState('')
-  const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
-
-  function switchMode(next) {
-    setMode(next)
-    setErr('')
-    setNotice('')
-    setCode('')
-    setPass('')
-    setNewPass('')
-  }
+  const [pendingEmail, setPendingEmail] = useState('')
 
   async function submit(e) {
-    e.preventDefault()
-    setBusy(true)
-    setErr('')
-    setNotice('')
-
+    e.preventDefault(); setBusy(true); setErr('')
     try {
-      if (mode === 'register') {
-        const d = await api('/api/auth/register', {
-          method: 'POST',
-          body: JSON.stringify({ email, password: pass })
-        })
-
-        if (d.verification_required) {
-          setNotice(d.message || 'Verification code sent to your email.')
-          setCode('')
-          setMode('verify')
-          return
-        }
+      const d = await api('/api/auth/' + mode, { method:'POST', body:JSON.stringify({ email, password:pass }) })
+      if (mode === 'register' && d.verification_required) {
+        setPendingEmail(d.email); setMode('verify'); return
       }
-
-      if (mode === 'verify') {
-        const d = await api('/api/auth/verify', {
-          method: 'POST',
-          body: JSON.stringify({ email, code })
-        })
-
-        localStorage.setItem('ng_token', d.token)
-        done(d.user)
-        return
-      }
-
-      if (mode === 'forgot') {
-        const d = await api('/api/auth/forgot-password', {
-          method: 'POST',
-          body: JSON.stringify({ email })
-        })
-
-        setNotice(d.message || 'If a verified account exists, a reset code has been sent.')
-        setCode('')
-        setMode('reset')
-        return
-      }
-
-      if (mode === 'reset') {
-        const d = await api('/api/auth/reset-password', {
-          method: 'POST',
-          body: JSON.stringify({
-            email,
-            code,
-            new_password: newPass
-          })
-        })
-
-        setNotice(d.message || 'Password reset successfully. You can now sign in.')
-        setPass('')
-        setNewPass('')
-        setCode('')
-        setMode('login')
-        return
-      }
-
-      const d = await api('/api/auth/login', {
-        method: 'POST',
-        body: JSON.stringify({ email, password: pass })
-      })
-
-      localStorage.setItem('ng_token', d.token)
-      done(d.user)
-    } catch (x) {
-      setErr(x.message)
-    } finally {
-      setBusy(false)
-    }
+      localStorage.setItem('ng_token', d.token); done(d.user)
+    } catch (x) { setErr(x.message) } finally { setBusy(false) }
   }
 
-  async function resendVerification() {
-    setBusy(true)
-    setErr('')
-    setNotice('')
-
+  async function forgot(e) {
+    e.preventDefault(); setBusy(true); setErr('')
     try {
-      const d = await api('/api/auth/resend-verification', {
-        method: 'POST',
-        body: JSON.stringify({ email })
-      })
-      setNotice(d.message || 'A new verification code has been sent.')
-    } catch (x) {
-      setErr(x.message)
-    } finally {
-      setBusy(false)
-    }
+      await api('/api/auth/forgot-password', { method:'POST', body:JSON.stringify({ email }) })
+      setPendingEmail(email.trim().toLowerCase()); setMode('reset')
+    } catch (x) { setErr(x.message) } finally { setBusy(false) }
   }
 
-  const title = {
-    login: 'Welcome back.',
-    register: 'Start building.',
-    verify: 'Verify your email.',
-    forgot: 'Forgot your password?',
-    reset: 'Set a new password.'
-  }[mode]
+  async function reset(e) {
+    e.preventDefault(); setBusy(true); setErr('')
+    try {
+      await api('/api/auth/reset-password', { method:'POST', body:JSON.stringify({ email:pendingEmail, code:pass.split(':')[0], new_password:pass.split(':')[1] || '' }) })
+      setEmail(pendingEmail); setPass(''); setMode('login')
+    } catch (x) { setErr(x.message) } finally { setBusy(false) }
+  }
 
-  const description = {
-    login: 'Sign in to continue to your intelligent workspace.',
-    register: 'Create a private NG INTELLIGENCE account.',
-    verify: `Enter the 6-digit code sent to ${email}.`,
-    forgot: 'Enter your email and we will send a password reset code.',
-    reset: `Enter the 6-digit code sent to ${email}, then choose a new password.`
-  }[mode]
+  if (mode === 'verify') return <Verification email={pendingEmail} onVerified={done} onBack={() => setMode('register')} />
 
-  return (
-    <div className="auth">
-      <div className="glow g1" />
-      <div className="glow g2" />
+  if (mode === 'forgot') {
+    return <AuthShell><div className="verify-icon"><KeyRound size={27} /></div><div className="authcopy"><span className="eyebrow">ACCOUNT RECOVERY</span><h1>Reset your password.</h1><p>Enter your account email and we’ll send a reset code.</p></div><form onSubmit={forgot}><label>Email<input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@example.com" required /></label>{err && <div className="error">{err}</div>}<button className="gradientbtn authbtn" disabled={busy} type="submit">{busy ? 'Sending code…' : 'Send reset code'}</button></form><div className="authlinks"><button onClick={()=>setMode('login')}>Back to sign in</button></div></AuthShell>
+  }
 
-      <div className="authbox">
-        <Brand />
-
-        <div className="authcopy">
-          <span className="eyebrow">
-            {mode === 'verify' || mode === 'reset'
-              ? 'SECURE ACCOUNT'
-              : mode === 'login'
-                ? 'PRIVATE AI WORKSPACE'
-                : mode === 'forgot'
-                  ? 'ACCOUNT RECOVERY'
-                  : 'CREATE YOUR WORKSPACE'}
-          </span>
-
-          <h1>{title}</h1>
-          <p>{description}</p>
-        </div>
-
-        {notice && <div className="success">{notice}</div>}
+  if (mode === 'reset') {
+    return <AuthShell>
+      <div className="verify-icon"><KeyRound size={27} /></div>
+      <div className="authcopy"><span className="eyebrow">RESET PASSWORD</span><h1>Create a new password.</h1><p>Enter the code sent to <b>{pendingEmail}</b>.</p></div>
+      <form onSubmit={reset}>
+        <label>Reset code<input inputMode="numeric" maxLength={6} value={pass.split(':')[0]} onChange={e => setPass(e.target.value.replace(/\D/g,'').slice(0,6)+':'+(pass.split(':')[1]||''))} placeholder="000000" required /></label>
+        <label>New password<input type="password" minLength={8} value={pass.split(':')[1]||''} onChange={e => setPass((pass.split(':')[0]||'')+':'+e.target.value)} placeholder="Minimum 8 characters" required /></label>
         {err && <div className="error">{err}</div>}
+        <button className="gradientbtn authbtn" disabled={busy} type="submit">{busy ? 'Resetting…' : 'Reset password'}</button>
+      </form>
+      <div className="authlinks"><button onClick={() => setMode('login')}>Back to sign in</button></div>
+    </AuthShell>
+  }
 
-        <form onSubmit={submit}>
-          {(mode === 'login' || mode === 'register' || mode === 'forgot') && (
-            <label>
-              Email
-              <input
-                type="email"
-                value={email}
-                onChange={e => setEmail(e.target.value)}
-                placeholder="you@example.com"
-                autoComplete="email"
-                required
-              />
-            </label>
-          )}
-
-          {(mode === 'login' || mode === 'register') && (
-            <label>
-              Password
-              <input
-                type="password"
-                value={pass}
-                onChange={e => setPass(e.target.value)}
-                placeholder="Minimum 8 characters"
-                minLength="8"
-                autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
-                required
-              />
-            </label>
-          )}
-
-          {(mode === 'verify' || mode === 'reset') && (
-            <label>
-              Verification code
-              <input
-                className="codeinput"
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                maxLength="6"
-                value={code}
-                onChange={e => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                placeholder="000000"
-                required
-              />
-            </label>
-          )}
-
-          {mode === 'reset' && (
-            <label>
-              New password
-              <input
-                type="password"
-                value={newPass}
-                onChange={e => setNewPass(e.target.value)}
-                placeholder="Minimum 8 characters"
-                minLength="8"
-                autoComplete="new-password"
-                required
-              />
-            </label>
-          )}
-
-          <button
-            className="gradientbtn authbtn"
-            disabled={busy}
-            type="submit"
-          >
-            {busy
-              ? 'Please wait…'
-              : mode === 'login'
-                ? 'Sign in'
-                : mode === 'register'
-                  ? 'Create account'
-                  : mode === 'verify'
-                    ? 'Verify email'
-                    : mode === 'forgot'
-                      ? 'Send reset code'
-                      : 'Reset password'}
-          </button>
-        </form>
-
-        {mode === 'verify' && (
-          <div className="authactions">
-            <button
-              type="button"
-              onClick={resendVerification}
-              disabled={busy}
-            >
-              Resend verification code
-            </button>
-            <button
-              type="button"
-              onClick={() => switchMode('register')}
-              disabled={busy}
-            >
-              Use another email
-            </button>
-          </div>
-        )}
-
-        {mode === 'reset' && (
-          <div className="authactions">
-            <button
-              type="button"
-              onClick={async () => {
-                setBusy(true)
-                setErr('')
-                setNotice('')
-                try {
-                  const d = await api('/api/auth/forgot-password', {
-                    method: 'POST',
-                    body: JSON.stringify({ email })
-                  })
-                  setNotice(d.message || 'A new reset code has been sent.')
-                } catch (x) {
-                  setErr(x.message)
-                } finally {
-                  setBusy(false)
-                }
-              }}
-              disabled={busy}
-            >
-              Resend reset code
-            </button>
-            <button type="button" onClick={() => switchMode('login')} disabled={busy}>
-              Back to sign in
-            </button>
-          </div>
-        )}
-
-        {(mode === 'login' || mode === 'register') && (
-          <div className="authlinks">
-            {mode === 'login' && (
-              <button type="button" onClick={() => switchMode('forgot')}>
-                Forgot password?
-              </button>
-            )}
-
-            <div className="switch">
-              {mode === 'login'
-                ? 'New to NG INTELLIGENCE?'
-                : 'Already have an account?'}
-
-              <button
-                type="button"
-                onClick={() => switchMode(mode === 'login' ? 'register' : 'login')}
-              >
-                {mode === 'login' ? 'Create account' : 'Sign in'}
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  )
+  return <AuthShell>
+    <div className="authcopy"><span className="eyebrow">{mode==='login' ? 'PRIVATE AI WORKSPACE' : 'CREATE YOUR WORKSPACE'}</span><h1>{mode==='login' ? 'Welcome back.' : 'Start building.'}</h1><p>{mode==='login' ? 'Sign in to continue to your intelligent workspace.' : 'Create a private NG INTELLIGENCE account.'}</p></div>
+    <form onSubmit={mode === 'login' ? submit : submit}>
+      <label>Email<input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@example.com" required /></label>
+      <label>Password<input type="password" value={pass} onChange={e=>setPass(e.target.value)} placeholder="Minimum 8 characters" minLength="8" required /></label>
+      {mode === 'login' && <button className="forgotlink" type="button" onClick={() => {setErr('');setMode('forgot')}}>Forgot password?</button>}
+      {err && <div className="error">{err}</div>}
+      <button className="gradientbtn authbtn" disabled={busy} type="submit">{busy ? 'Please wait…' : mode==='login' ? 'Sign in' : 'Create account'}</button>
+    </form>
+    <div className="switch">{mode==='login' ? 'New to NG INTELLIGENCE?' : 'Already have an account?'} <button onClick={()=>{setErr('');setMode(mode==='login'?'register':'login')}}>{mode==='login'?'Create account':'Sign in'}</button></div>
+    {mode === 'forgot' && <div className="authlinks"><button onClick={()=>setMode('login')}>Back to sign in</button></div>}
+  </AuthShell>
 }
 /* =========================
    ADMIN
@@ -391,6 +226,7 @@ function Admin({ close }) {
     system_prompt: ''
   })
   const [logs, setLogs] = useState([])
+  const [branding, setBranding] = useState({ logo_data: '' })
 
   const load = async () => {
     try {
@@ -412,6 +248,9 @@ function Admin({ close }) {
 
       if (tab === 'logs') {
         setLogs(await api('/api/admin/logs'))
+      }
+      if (tab === 'branding') {
+        setBranding(await api('/api/admin/branding'))
       }
     } catch (e) {
       console.error(e)
@@ -448,7 +287,8 @@ function Admin({ close }) {
             ['keys', 'Gemini Keys'],
             ['settings', 'AI Settings'],
             ['users', 'Users'],
-            ['logs', 'Logs']
+            ['logs', 'Logs'],
+            ['branding', 'Branding']
           ].map(x => (
             <button
               className={tab === x[0] ? 'active' : ''}
@@ -530,6 +370,10 @@ function Admin({ close }) {
               </div>
             ))}
           </div>
+        )}
+
+        {tab === 'branding' && (
+          <BrandingPanel data={branding} reload={load} />
         )}
 
         {tab === 'logs' && (
@@ -671,6 +515,23 @@ function Keys({ keys, reload }) {
   )
 }
 
+function BrandingPanel({ data, reload }) {
+  const [logo, setLogo] = useState(data.logo_data || '')
+  const [msg, setMsg] = useState('')
+  const [busy, setBusy] = useState(false)
+  async function choose(e) {
+    const file=e.target.files?.[0]; if(!file) return
+    if(file.size > 2*1024*1024) return setMsg('Logo must be 2 MB or smaller.')
+    const reader=new FileReader(); reader.onload=()=>setLogo(reader.result); reader.readAsDataURL(file)
+  }
+  async function save() {
+    setBusy(true); setMsg('')
+    try { await api('/api/admin/branding',{method:'PUT',body:JSON.stringify({logo_data:logo})}); setMsg('Website logo saved.'); reload() }
+    catch(e){setMsg(e.message)} finally{setBusy(false)}
+  }
+  return <div className="settings branding-panel"><span className="eyebrow">WEBSITE BRANDING</span><h3>Website logo</h3><p>Upload the logo that appears across NG INTELLIGENCE.</p><div className="logo-preview">{logo ? <img src={logo} alt="Website logo" /> : <span>N</span>}</div><label className="uploadbox"><Upload size={17}/> Choose logo<input type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" onChange={choose}/></label>{msg&&<div className="success">{msg}</div>}<button className="gradientbtn" onClick={save} disabled={busy}>{busy?'Saving…':'Save website logo'}</button></div>
+}
+
 /* =========================
    SETTINGS
 ========================= */
@@ -799,7 +660,7 @@ function MessageBubble({
         {isAI ? 'N' : 'U'}
       </div>
 
-      <div className="content premium-text">
+      <div className="content">
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
         >
@@ -814,6 +675,22 @@ function MessageBubble({
   )
 }
 
+function ProfilePanel({ user, onClose, onSaved }) {
+  const [avatar, setAvatar] = useState(user.avatar_data || '')
+  const [msg, setMsg] = useState('')
+  const [busy, setBusy] = useState(false)
+  async function choose(e) {
+    const file=e.target.files?.[0]; if(!file) return
+    if(file.size > 2*1024*1024) return setMsg('Profile photo must be 2 MB or smaller.')
+    const reader=new FileReader(); reader.onload=()=>setAvatar(reader.result); reader.readAsDataURL(file)
+  }
+  async function save() {
+    setBusy(true); setMsg('')
+    try { const d=await api('/api/profile',{method:'PUT',body:JSON.stringify({avatar_data:avatar})}); onSaved(d.user); setMsg('Profile photo updated.') } catch(e){setMsg(e.message)} finally{setBusy(false)}
+  }
+  return <div className="profile-overlay" onClick={onClose}><div className="profile-card" onClick={e=>e.stopPropagation()}><div className="profile-head"><div><span className="eyebrow">PROFILE & SETTINGS</span><h2>Your profile</h2></div><button className="icon" onClick={onClose}><X/></button></div><div className="profile-avatar">{avatar?<img src={avatar} alt="Profile"/>:<UserCircle size={42}/>}</div><label className="uploadbox"><Upload size={17}/> Upload profile photo<input type="file" accept="image/png,image/jpeg,image/webp" onChange={choose}/></label><div className="profile-email"><span>Email</span><b>{user.email}</b><small>Your account email is your permanent login identity.</small></div>{msg&&<div className="success">{msg}</div>}<button className="gradientbtn" onClick={save} disabled={busy}>{busy?'Saving…':'Save profile'}</button></div></div>
+}
+
 /* =========================
    MAIN APP
 ========================= */
@@ -822,7 +699,6 @@ function App() {
   const [user, setUser] =
     useState(null)
   const messagesEndRef = useRef(null)
-  const inputRef = useRef(null)
 
   const [side, setSide] =
     useState(true)
@@ -844,6 +720,7 @@ function App() {
 
   const [admin, setAdmin] =
     useState(false)
+  const [profile, setProfile] = useState(false)
 
   useEffect(() => {
     if (msgs.length > 0 || busy) {
@@ -905,9 +782,6 @@ function App() {
     }
 
     setInput('')
-    if (inputRef.current) {
-      inputRef.current.style.height = '45px'
-    }
 
     setMsgs(m => [
       ...m,
@@ -970,7 +844,7 @@ function App() {
   }
 
   return (
-    <div className="app">
+    <div className={'app ' + (side ? 'sidebar-open' : 'sidebar-closed')}>
       {/* HEADER */}
 
       <header>
@@ -1006,12 +880,12 @@ function App() {
             </button>
           )}
 
-          <button
-            className="icon"
-            onClick={logout}
-          >
-            <LogOut />
+          <button className="profile-trigger" onClick={() => setProfile(true)} title="Profile settings">
+            {user.avatar_data ? <img src={user.avatar_data} alt="Profile" /> : <UserCircle size={18} />}
+            <span>{user.email.split('@')[0]}</span>
           </button>
+
+          <button className="icon" onClick={logout}><LogOut /></button>
         </div>
       </header>
 
@@ -1066,8 +940,7 @@ function App() {
             <div className="sidebottom">
               <div className="userpill">
                 <div className="avatar">
-                  {user.email[0]
-                    .toUpperCase()}
+                  {user.avatar_data ? <img src={user.avatar_data} alt="Profile" /> : user.email[0].toUpperCase()}
                 </div>
 
                 <div>
@@ -1133,11 +1006,9 @@ function App() {
 
           {/* COMPOSER */}
 
-          {!busy && (
-            <div className="composer">
+          {!busy && <div className="composer">
 
             <textarea
-              ref={inputRef}
               value={input}
               onChange={e =>
                 setInput(
@@ -1188,11 +1059,12 @@ function App() {
                 <Send size={18} />
               )}
             </button>
-            </div>
-          )}
+          </div>}
 
         </main>
       </div>
+
+      {profile && <ProfilePanel user={user} onClose={() => setProfile(false)} onSaved={u => { setUser(u); setProfile(false) }} />}
 
       {admin && (
         <Admin
