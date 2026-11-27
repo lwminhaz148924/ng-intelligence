@@ -614,7 +614,7 @@ function SettingsPanel({
    TYPING INDICATOR
 ========================= */
 
-function TypingIndicator({ siteLogo }) {
+function TypingIndicator({ siteLogo, continuationStatus }) {
   return (
     <div
       className="msg assistant typingmsg"
@@ -626,7 +626,7 @@ function TypingIndicator({ siteLogo }) {
       </div>
 
       <div className="typingbubble">
-        <span className="typinglabel">Thinking</span>
+        <span className="typinglabel">{continuationStatus || 'Thinking'}</span>
         <span className="typingdot" />
         <span className="typingdot" />
         <span className="typingdot" />
@@ -640,17 +640,23 @@ function TypingIndicator({ siteLogo }) {
 ========================= */
 
 function parseGeneratedFiles(raw = '') {
+  const marker = /\n?\n?<!--NG_CONTINUATION_PARTS:(\d+);COMPLETE:([01])-->\s*$/i
+  const metaMatch = raw.match(marker)
+  const continuation = metaMatch
+    ? { parts: Number(metaMatch[1]), complete: metaMatch[2] === '1' }
+    : null
+  const withoutMeta = raw.replace(marker, '').trim()
   const files = []
   const pattern = /<FILE\s+path=["\']([^"\']+)["\']\s*>([\s\S]*?)<\/FILE>/gi
   let match
-  while ((match = pattern.exec(raw)) !== null) {
+  while ((match = pattern.exec(withoutMeta)) !== null) {
     files.push({ path: match[1].trim(), content: match[2].trim() })
   }
-  const content = raw
+  const content = withoutMeta
     .replace(pattern, '')
     .replace(/<\/?FILE(?:\s+[^>]*)?>/gi, '')
     .trim()
-  return { content, files }
+  return { content, files, continuation }
 }
 
 function downloadGeneratedFile(file) {
@@ -728,6 +734,26 @@ function MessageBubble({
           </div>
         )}
 
+        {isAI && parsed.continuation && (
+          <div
+            className={`continuation-note ${parsed.continuation.complete ? '' : 'continuation-warning'}`}
+            style={{
+              marginTop: 12,
+              padding: '9px 12px',
+              borderRadius: 10,
+              fontSize: 12,
+              lineHeight: 1.5,
+              color: parsed.continuation.complete ? 'inherit' : '#92400e',
+              background: parsed.continuation.complete ? 'rgba(100,116,139,.08)' : 'rgba(234,179,8,.10)',
+              border: `1px solid ${parsed.continuation.complete ? 'rgba(100,116,139,.14)' : 'rgba(234,179,8,.25)'}`
+            }}
+          >
+            {parsed.continuation.complete
+              ? `${parsed.files.length ? '↪ File output' : '↪ Text output'} automatically continued and assembled (${parsed.continuation.parts} parts).`
+              : `⚠️ ${parsed.files.length ? 'File' : 'Text'} output reached the automatic continuation limit after ${parsed.continuation.parts} parts; the result may be incomplete.`}
+          </div>
+        )}
+
         {isAI && (
           <div className="message-glow" />
         )}
@@ -784,6 +810,7 @@ function App() {
   const [busy, setBusy] =
     useState(false)
   const [revealing, setRevealing] = useState(false)
+  const [continuationStatus, setContinuationStatus] = useState('')
 
   const [admin, setAdmin] =
     useState(false)
@@ -894,27 +921,56 @@ function App() {
     const text = input.trim()
     if (!text || busy) return
 
+    const requestId = (window.crypto && window.crypto.randomUUID)
+      ? window.crypto.randomUUID()
+      : `ng_${Date.now()}_${Math.random().toString(36).slice(2, 12)}`
+
     setInput('')
     setMsgs(m => [...m, { role: 'user', content: text }])
     setBusy(true)
     setRevealing(false)
+    setContinuationStatus('')
+
+    let polling = true
+    const pollProgress = async () => {
+      while (polling) {
+        try {
+          const progress = await api(`/api/chat/progress/${requestId}`)
+          if (progress.status === 'continuing') {
+            setContinuationStatus(`পরবর্তী অংশ তৈরি হচ্ছে — Part ${progress.part}...`)
+          } else if (progress.status === 'generating') {
+            setContinuationStatus('')
+          } else if (progress.status === 'completed') {
+            setContinuationStatus('সব অংশ একত্র করা হচ্ছে...')
+          } else if (progress.status === 'limit_reached') {
+            setContinuationStatus('আউটপুটের সর্বোচ্চ অংশ তৈরি হয়েছে...')
+          }
+        } catch (_) {
+          // The chat request remains authoritative if progress polling fails.
+        }
+        await new Promise(resolve => window.setTimeout(resolve, 1000))
+      }
+    }
+    const progressTask = pollProgress()
 
     try {
       const d = await api('/api/chat', {
         method: 'POST',
-        body: JSON.stringify({ message: text, chat_id: cid })
+        body: JSON.stringify({ message: text, chat_id: cid, request_id: requestId })
       })
 
+      polling = false
+      await progressTask
       setCid(d.chat_id)
       if (user?.id) localStorage.setItem(`ng_active_chat_${user.id}`, String(d.chat_id))
 
       const fullAnswer = String(d.answer || '')
+      setContinuationStatus('')
       setRevealing(true)
       setMsgs(m => [...m, { role: 'assistant', content: '' }])
 
-      // Reveal the completed answer in small chunks, similar to live typing.
-      // The server still saves the complete response, so refreshing the chat
-      // always restores the exact full message and generated-file blocks.
+      // Reveal the fully assembled response only after all continuation parts
+      // have been collected and saved by the backend.
       const chunkSize = Math.max(3, Math.ceil(fullAnswer.length / 700))
       for (let index = 0; index < fullAnswer.length; index += chunkSize) {
         const visible = fullAnswer.slice(0, index + chunkSize)
@@ -929,7 +985,6 @@ function App() {
         await new Promise(resolve => window.setTimeout(resolve, 12))
       }
 
-      // Ensure even an empty/very short provider response settles correctly.
       setMsgs(current => {
         const next = [...current]
         const last = next[next.length - 1]
@@ -938,9 +993,14 @@ function App() {
       })
       loadChats()
     } catch (e) {
+      polling = false
+      await progressTask
+      setContinuationStatus('')
       setRevealing(false)
       setMsgs(m => [...m, { role: 'assistant', content: '**Request failed:** ' + e.message }])
     } finally {
+      polling = false
+      setContinuationStatus('')
       setRevealing(false)
       setBusy(false)
     }
@@ -1110,7 +1170,7 @@ function App() {
                 )}
 
                 {busy && !revealing && (
-                  <TypingIndicator siteLogo={siteLogo} />
+                  <TypingIndicator siteLogo={siteLogo} continuationStatus={continuationStatus} />
                 )}
 
                 <div
