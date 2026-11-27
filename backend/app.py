@@ -1284,14 +1284,23 @@ def chat(request: Request, req: ChatReq, u=Depends(current)):
     c.commit()
     c.close()
 
-    context = "\n\n".join(
-        f"{row['role'].upper()}: {row['content']}"
-        for row in rows
-    )
+    # Keep the prompt compact: the just-inserted user message is sent separately
+    # below, so exclude it from history and avoid sending it twice. A bounded
+    # recent window prevents long conversations from making every reply slower.
+    history_rows = rows[:-1][-12:]
+    history_parts = []
+    history_chars = 0
+    for row in reversed(history_rows):
+        part = f"{row['role'].upper()}: {row['content']}"
+        if history_chars + len(part) > 18000:
+            break
+        history_parts.append(part)
+        history_chars += len(part)
+    context = "\n\n".join(reversed(history_parts))
 
     try:
         answer, model, keylabel = gemini(
-            "CONVERSATION:\n" + context +
+            ("CONVERSATION HISTORY:\n" + context if context else "") +
             "\n\nCURRENT USER REQUEST:\n" + message_text
         )
     except HTTPException as error:
