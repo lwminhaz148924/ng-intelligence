@@ -63,6 +63,35 @@ pwd = CryptContext(schemes=["bcrypt"], deprecated="auto")
 HTTP_SESSION = requests.Session()
 
 
+# Tracks multi-part generation so the frontend can show live continuation status.
+_CHAT_PROGRESS = {}
+_CHAT_PROGRESS_LOCK = threading.Lock()
+_CHAT_PROGRESS_TTL = 900
+MAX_OUTPUT_PARTS = 20
+GEMINI_MAX_OUTPUT_TOKENS = 16384
+
+
+def set_chat_progress(request_id, user_id, status, part=1, total_parts=1, complete=None):
+    if not request_id:
+        return
+    now_ts = time.time()
+    with _CHAT_PROGRESS_LOCK:
+        expired = [
+            key for key, value in _CHAT_PROGRESS.items()
+            if now_ts - value.get("updated_at", now_ts) > _CHAT_PROGRESS_TTL
+        ]
+        for key in expired:
+            _CHAT_PROGRESS.pop(key, None)
+        _CHAT_PROGRESS[request_id] = {
+            "user_id": int(user_id),
+            "status": status,
+            "part": int(part),
+            "total_parts": int(total_parts),
+            "complete": complete,
+            "updated_at": now_ts,
+        }
+
+
 def encryption():
     raw = os.getenv("API_KEY_ENCRYPTION_KEY", "").strip()
 
@@ -380,6 +409,7 @@ class BrandingReq(BaseModel):
 class ChatReq(BaseModel):
     message: str
     chat_id: Optional[int] = None
+    request_id: Optional[str] = None
 
 
 class KeyReq(BaseModel):
@@ -680,7 +710,7 @@ def keys():
     return list(ai_config()[0])
 
 
-def gemini(prompt, history=None):
+def gemini(prompt, history=None, progress_callback=None):
     active, model, base_system_prompt = ai_config()
 
     if not active:
@@ -707,77 +737,149 @@ RESPONSE AND FILE OUTPUT RULES:
 - When modifying an existing file, return the entire updated file, not only a patch or a few changed functions.
 - Include all required imports, configuration, error handling, and supporting files. Explain any unavoidable limitation instead of silently omitting code.
 - Never claim that files have been saved to the user's device; the interface will provide downloadable file attachments.
+- If output is continued in multiple parts, continue exactly from the last generated character. Never repeat earlier text or code. Keep any open <FILE> block open until its file is complete, and close it exactly once.
 """
 
-            payload = {
-                "systemInstruction": {
-                    "parts": [
-                        {"text": system_prompt}
-                    ]
-                },
-                "contents": [
-                    *[
-                        {
-                            "role": item["role"],
-                            "parts": [{"text": item["content"]}]
-                        }
-                        for item in (history or [])
-                        if item.get("role") in ("user", "model") and item.get("content")
-                    ],
-                    {
-                        "role": "user",
-                        "parts": [{"text": prompt}]
-                    }
-                ],
-                "generationConfig": {
-                    "temperature": 0.3,
-                    "maxOutputTokens": 16384
+            contents = [
+                {
+                    "role": item["role"],
+                    "parts": [{"text": item["content"]}]
                 }
-            }
+                for item in (history or [])
+                if item.get("role") in ("user", "model") and item.get("content")
+            ]
+            contents.append({"role": "user", "parts": [{"text": prompt}]})
 
+            collected_parts = []
+            part_count = 0
+            output_complete = False
             started_at = time.perf_counter()
-            print(f"[AI START] model={model}, key={label}", flush=True)
-            r = HTTP_SESSION.post(
-                url,
-                headers={
-                    "x-goog-api-key": key,
-                    "Content-Type": "application/json"
-                },
-                json=payload,
-                timeout=(10, 90)
-            )
-            elapsed = time.perf_counter() - started_at
-            print(
-                f"[AI HTTP] model={model}, key={label}, status={r.status_code}, seconds={elapsed:.2f}",
-                flush=True
-            )
 
-            if r.ok:
-                data = r.json()
-                parts = (
-                    data.get("candidates", [{}])[0]
-                    .get("content", {})
-                    .get("parts", [])
+            while part_count < MAX_OUTPUT_PARTS:
+                part_count += 1
+                if progress_callback:
+                    progress_callback(
+                        "generating" if part_count == 1 else "continuing",
+                        part_count,
+                        part_count
+                    )
+
+                payload = {
+                    "systemInstruction": {"parts": [{"text": system_prompt}]},
+                    "contents": contents,
+                    "generationConfig": {
+                        "temperature": 0.3,
+                        "maxOutputTokens": GEMINI_MAX_OUTPUT_TOKENS
+                    }
+                }
+
+                call_started = time.perf_counter()
+                print(
+                    f"[AI PART START] model={model}, key={label}, part={part_count}/{MAX_OUTPUT_PARTS}",
+                    flush=True
+                )
+                r = HTTP_SESSION.post(
+                    url,
+                    headers={
+                        "x-goog-api-key": key,
+                        "Content-Type": "application/json"
+                    },
+                    json=payload,
+                    timeout=(10, 120)
+                )
+                elapsed = time.perf_counter() - call_started
+                print(
+                    f"[AI PART HTTP] model={model}, key={label}, part={part_count}, status={r.status_code}, seconds={elapsed:.2f}",
+                    flush=True
                 )
 
-                answer = "\n".join(
+                if not r.ok:
+                    last = f"{label}: HTTP {r.status_code}"
+                    raise RuntimeError(last)
+
+                data = r.json()
+                candidates = data.get("candidates") or []
+                if not candidates:
+                    feedback = data.get("promptFeedback", {})
+                    last = f"{label}: Gemini returned no candidate ({feedback})"
+                    raise RuntimeError(last)
+
+                candidate = candidates[0]
+                finish_reason = candidate.get("finishReason", "")
+                response_parts = candidate.get("content", {}).get("parts", [])
+                part_text = "".join(
                     item.get("text", "")
-                    for item in parts
+                    for item in response_parts
                     if item.get("text")
-                ).strip()
+                )
 
-                if answer:
-                    print(
-                        f"[AI DONE] model={model}, key={label}, seconds={time.perf_counter() - started_at:.2f}, output_chars={len(answer)}",
-                        flush=True
-                    )
-                    return answer, model, label
+                if part_text:
+                    collected_parts.append(part_text)
 
-            last = f"{label}: HTTP {r.status_code}"
+                # MAX_TOKENS means Gemini stopped because this response chunk
+                # reached its output budget. Append the partial model response
+                # and explicitly ask Gemini to resume without repeating it.
+                if finish_reason == "MAX_TOKENS":
+                    if part_count >= MAX_OUTPUT_PARTS:
+                        output_complete = False
+                        break
+                    if not part_text:
+                        last = f"{label}: MAX_TOKENS returned an empty continuation part"
+                        raise RuntimeError(last)
+
+                    contents.append({
+                        "role": "model",
+                        "parts": [{"text": part_text}]
+                    })
+                    contents.append({
+                        "role": "user",
+                        "parts": [{
+                            "text": (
+                                "Continue the response immediately from the exact point where you stopped. "
+                                "Do not repeat, summarize, or rewrite any previous content. "
+                                "Preserve formatting and code exactly. If a file block is still open, "
+                                "continue inside that same file block; do not open a duplicate block. "
+                                "Finish all remaining requested content."
+                            )
+                        }]
+                    })
+                    continue
+
+                if not part_text:
+                    last = f"{label}: Gemini returned an empty response"
+                    raise RuntimeError(last)
+
+                output_complete = finish_reason not in ("SAFETY", "RECITATION", "BLOCKLIST")
+                break
+
+            answer = "".join(collected_parts).strip()
+            if not answer:
+                last = f"{label}: Gemini returned an empty response"
+                raise RuntimeError(last)
+
+            # Persist a small hidden marker so the UI can show the continuation
+            # note again when the user reopens this conversation.
+            if part_count > 1 or not output_complete:
+                marker = f"\n\n<!--NG_CONTINUATION_PARTS:{part_count};COMPLETE:{1 if output_complete else 0}-->"
+                answer += marker
+
+            print(
+                f"[AI DONE] model={model}, key={label}, seconds={time.perf_counter() - started_at:.2f}, parts={part_count}, complete={output_complete}, output_chars={len(answer)}",
+                flush=True
+            )
+            if progress_callback:
+                progress_callback(
+                    "completed" if output_complete else "limit_reached",
+                    part_count,
+                    part_count,
+                    output_complete
+                )
+            return answer, model, label, part_count, output_complete
 
         except Exception as error:
             last = f"{label}: {type(error).__name__}"
             print(f"[AI ERROR] key={label}, error={type(error).__name__}: {error}", flush=True)
+            continue
 
     raise HTTPException(
         502,
@@ -1262,6 +1364,27 @@ def branding():
 
 
 # =========================================================
+# CHAT GENERATION PROGRESS
+# =========================================================
+
+@app.get("/api/chat/progress/{request_id}")
+def chat_progress(request_id: str, u=Depends(current)):
+    if not re.fullmatch(r"[A-Za-z0-9_-]{8,80}", request_id):
+        raise HTTPException(400, "Invalid generation request id.")
+
+    with _CHAT_PROGRESS_LOCK:
+        item = _CHAT_PROGRESS.get(request_id)
+        if not item or item.get("user_id") != int(u["id"]):
+            return {"status": "waiting", "part": 1, "total_parts": 1}
+        return {
+            "status": item["status"],
+            "part": item["part"],
+            "total_parts": item["total_parts"],
+            "complete": item.get("complete")
+        }
+
+
+# =========================================================
 # CHAT HISTORY
 # =========================================================
 
@@ -1337,6 +1460,10 @@ def chat(request: Request, req: ChatReq, u=Depends(current)):
     if not message_text:
         raise HTTPException(400, "Message is empty.")
 
+    request_id = (req.request_id or "").strip()
+    if request_id and not re.fullmatch(r"[A-Za-z0-9_-]{8,80}", request_id):
+        raise HTTPException(400, "Invalid generation request id.")
+
     c = conn()
     chat_id = req.chat_id
 
@@ -1396,9 +1523,21 @@ def chat(request: Request, req: ChatReq, u=Depends(current)):
     c.commit()
     c.close()
 
+    if request_id:
+        set_chat_progress(request_id, u["id"], "generating", 1, 1)
+
+    def report_progress(status, part, total_parts, complete=None):
+        set_chat_progress(request_id, u["id"], status, part, total_parts, complete)
+
     try:
-        answer, model, keylabel = gemini(message_text, conversation_context)
+        answer, model, keylabel, output_parts, output_complete = gemini(
+            message_text,
+            conversation_context,
+            report_progress if request_id else None
+        )
     except HTTPException as error:
+        if request_id:
+            set_chat_progress(request_id, u["id"], "error", 1, 1, False)
         log(u["id"], "chat", "error", str(error.detail))
         raise
 
@@ -1437,7 +1576,9 @@ def chat(request: Request, req: ChatReq, u=Depends(current)):
         "chat_id": chat_id,
         "answer": answer,
         "files": extract_files(answer),
-        "model": model
+        "model": model,
+        "output_parts": output_parts,
+        "output_complete": output_complete
     }
 
 
