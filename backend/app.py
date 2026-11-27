@@ -1276,33 +1276,14 @@ def chat(request: Request, req: ChatReq, u=Depends(current)):
         (chat_id, "user", message_text, now())
     )
 
-    rows = c.execute(
-        "SELECT role,content FROM messages WHERE chat_id=? ORDER BY id",
-        (chat_id,)
-    ).fetchall()
-
+    # Save the user's message to the database, but do not load or send
+    # previous conversation messages to Gemini. Only the current request
+    # is included in the AI prompt to keep input tokens and latency lower.
     c.commit()
     c.close()
 
-    # Keep the prompt compact: the just-inserted user message is sent separately
-    # below, so exclude it from history and avoid sending it twice. A bounded
-    # recent window prevents long conversations from making every reply slower.
-    history_rows = rows[:-1][-12:]
-    history_parts = []
-    history_chars = 0
-    for row in reversed(history_rows):
-        part = f"{row['role'].upper()}: {row['content']}"
-        if history_chars + len(part) > 18000:
-            break
-        history_parts.append(part)
-        history_chars += len(part)
-    context = "\n\n".join(reversed(history_parts))
-
     try:
-        answer, model, keylabel = gemini(
-            ("CONVERSATION HISTORY:\n" + context if context else "") +
-            "\n\nCURRENT USER REQUEST:\n" + message_text
-        )
+        answer, model, keylabel = gemini(message_text)
     except HTTPException as error:
         log(u["id"], "chat", "error", str(error.detail))
         raise
