@@ -1,6 +1,7 @@
 import os
 import re
-import sqlite3
+import psycopg
+from psycopg.rows import dict_row
 import hashlib
 import secrets
 import base64
@@ -37,7 +38,15 @@ DATA.mkdir(parents=True, exist_ok=True)
 WORKSPACE = Path(os.getenv("WORKSPACE_DIR", BASE / "workspace"))
 WORKSPACE.mkdir(parents=True, exist_ok=True)
 
-DB = DATA / "ng_intelligence.db"
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL is required. Configure the Supabase PostgreSQL connection string in Render.")
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = "postgresql://" + DATABASE_URL[len("postgres://"):]
+if DATABASE_URL.startswith("postgresql+psycopg://"):
+    DATABASE_URL = "postgresql://" + DATABASE_URL[len("postgresql+psycopg://"):]
+
+DB = DATABASE_URL
 
 MODEL_DEFAULT = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
 JWT_SECRET = os.getenv("JWT_SECRET", "CHANGE_ME")
@@ -63,7 +72,7 @@ def encryption():
 
 FERNET = encryption()
 
-app = FastAPI(title="NG INTELLIGENCE", version="2.4.0")
+app = FastAPI(title="NG INTELLIGENCE", version="3.0.0")
 app.state.limiter = limiter
 
 
@@ -96,10 +105,45 @@ app.add_middleware(
 # DATABASE
 # =========================================================
 
+class DatabaseConnection:
+    """Small compatibility layer for the existing SQL used by this app."""
+
+    def __init__(self):
+        self.raw = psycopg.connect(
+            DB,
+            row_factory=dict_row,
+            connect_timeout=15,
+            sslmode="require"
+        )
+
+    @staticmethod
+    def _sql(query):
+        # Existing application queries use SQLite-style qmark placeholders.
+        # The app's SQL contains no literal question marks in quoted strings.
+        return query.replace("?", "%s")
+
+    def execute(self, query, params=None):
+        return self.raw.execute(self._sql(query), params or ())
+
+    def executescript(self, script):
+        # Schema contains independent CREATE TABLE statements.
+        for statement in script.split(";"):
+            statement = statement.strip()
+            if statement:
+                self.raw.execute(statement.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "BIGSERIAL PRIMARY KEY"))
+
+    def commit(self):
+        self.raw.commit()
+
+    def rollback(self):
+        self.raw.rollback()
+
+    def close(self):
+        self.raw.close()
+
+
 def conn():
-    c = sqlite3.connect(DB, timeout=30)
-    c.row_factory = sqlite3.Row
-    return c
+    return DatabaseConnection()
 
 
 def now():
@@ -214,8 +258,11 @@ def init():
     """)
 
     columns = [
-        row["name"]
-        for row in c.execute("PRAGMA table_info(users)").fetchall()
+        row["column_name"]
+        for row in c.execute(
+            """SELECT column_name FROM information_schema.columns
+               WHERE table_schema = current_schema() AND table_name = 'users'"""
+        ).fetchall()
     ]
 
     if "is_verified" not in columns:
@@ -639,11 +686,16 @@ def extract_files(answer):
 
 @app.get("/")
 def root():
-    return {"name": "NG INTELLIGENCE", "status": "online", "version": "2.4.0"}
+    return {"name": "NG INTELLIGENCE", "status": "online", "version": "3.0.0"}
 
 
 @app.get("/api/health")
 def health():
+    c = conn()
+    try:
+        c.execute("SELECT 1").fetchone()
+    finally:
+        c.close()
     return {
         "online": True,
         "provider": "GEMINI",
@@ -699,7 +751,7 @@ def register(request: Request, a: Auth):
         )
         c.commit()
 
-    except sqlite3.IntegrityError:
+    except psycopg.IntegrityError:
         c.rollback()
         raise HTTPException(409, "Account already exists.")
 
@@ -1146,14 +1198,15 @@ def chat(request: Request, req: ChatReq, u=Depends(current)):
             c.close()
             raise HTTPException(404, "Chat not found.")
     else:
-        cur = c.execute(
+        created_chat = c.execute(
             """
             INSERT INTO chats(user_id,title,created_at,updated_at)
             VALUES(?,?,?,?)
+            RETURNING id
             """,
             (u["id"], message_text[:60], now(), now())
-        )
-        chat_id = cur.lastrowid
+        ).fetchone()
+        chat_id = created_chat["id"]
 
     c.execute(
         """
