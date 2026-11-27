@@ -6,6 +6,8 @@ from psycopg_pool import ConnectionPool
 import hashlib
 import secrets
 import base64
+import time
+import threading
 
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -56,6 +58,9 @@ ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
 limiter = Limiter(key_func=get_remote_address)
 
 pwd = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+# Reuse outbound HTTP connections to Gemini and the email service.
+HTTP_SESSION = requests.Session()
 
 
 def encryption():
@@ -155,6 +160,16 @@ class DatabaseConnection:
     def close(self):
         if not self._returned:
             self._returned = True
+            # Return pooled connections in a clean transaction state.
+            try:
+                if not self.raw.closed and self.raw.info.transaction_status != 0:
+                    self.raw.rollback()
+            except Exception:
+                try:
+                    DB_POOL.putconn(self.raw, close=True)
+                    return
+                except Exception:
+                    return
             DB_POOL.putconn(self.raw)
 
 
@@ -464,7 +479,7 @@ def send_auth_email(to_email, code, purpose="verification"):
         )
 
     try:
-        response = requests.post(
+        response = HTTP_SESSION.post(
             script_url,
             json={
                 "email": to_email,
@@ -586,53 +601,91 @@ def safe_path(rel):
 
 def get_setting(name, fallback=""):
     c = conn()
-    r = c.execute(
-        "SELECT value FROM settings WHERE name=?",
-        (name,)
-    ).fetchone()
-    c.close()
+    try:
+        r = c.execute(
+            "SELECT value FROM settings WHERE name=?",
+            (name,)
+        ).fetchone()
+    finally:
+        c.close()
 
     return r["value"] if r else fallback
 
 
 # =========================================================
-# GEMINI API
+# GEMINI API CONFIGURATION CACHE
 # =========================================================
 
+_AI_CONFIG_TTL = 15.0
+_AI_CONFIG_LOCK = threading.Lock()
+_AI_CONFIG_CACHE = {"expires_at": 0.0, "value": None}
+
+
+def clear_ai_config_cache():
+    """Invalidate cached keys/model/prompt after an admin setting changes."""
+    with _AI_CONFIG_LOCK:
+        _AI_CONFIG_CACHE["expires_at"] = 0.0
+        _AI_CONFIG_CACHE["value"] = None
+
+
+def ai_config():
+    cached = _AI_CONFIG_CACHE["value"]
+    if cached is not None and time.monotonic() < _AI_CONFIG_CACHE["expires_at"]:
+        return cached
+
+    with _AI_CONFIG_LOCK:
+        cached = _AI_CONFIG_CACHE["value"]
+        if cached is not None and time.monotonic() < _AI_CONFIG_CACHE["expires_at"]:
+            return cached
+
+        env_key = os.getenv("GEMINI_API_KEY", "").strip()
+        active_keys = []
+        model = MODEL_DEFAULT
+        system_prompt = SYSTEM_PROMPT
+
+        c = conn()
+        try:
+            rows = c.execute(
+                "SELECT label,key_cipher FROM api_keys WHERE active=1 ORDER BY id"
+            ).fetchall()
+            settings_rows = c.execute(
+                "SELECT name,value FROM settings WHERE name IN ('model','system_prompt')"
+            ).fetchall()
+
+            setting_map = {row["name"]: row["value"] for row in settings_rows}
+            model = setting_map.get("model") or MODEL_DEFAULT
+            system_prompt = setting_map.get("system_prompt") or SYSTEM_PROMPT
+
+            if env_key:
+                active_keys.append(("ENV", env_key))
+
+            for row in rows:
+                try:
+                    active_keys.append((
+                        row["label"],
+                        FERNET.decrypt(row["key_cipher"].encode()).decode()
+                    ))
+                except Exception:
+                    continue
+        finally:
+            c.close()
+
+        value = (active_keys, model, system_prompt)
+        _AI_CONFIG_CACHE["value"] = value
+        _AI_CONFIG_CACHE["expires_at"] = time.monotonic() + _AI_CONFIG_TTL
+        return value
+
+
 def keys():
-    env = os.getenv("GEMINI_API_KEY", "").strip()
-    out = []
-
-    if env:
-        out.append(("ENV", env))
-
-    c = conn()
-    try:
-        for r in c.execute(
-            "SELECT id,label,key_cipher FROM api_keys WHERE active=1 ORDER BY id"
-        ):
-            try:
-                out.append(
-                    (
-                        r["label"],
-                        FERNET.decrypt(r["key_cipher"].encode()).decode()
-                    )
-                )
-            except Exception:
-                continue
-    finally:
-        c.close()
-
-    return out
+    return list(ai_config()[0])
 
 
 def gemini(prompt):
-    active = keys()
+    active, model, base_system_prompt = ai_config()
 
     if not active:
         raise HTTPException(503, "Gemini API key is not configured.")
 
-    model = get_setting("model", MODEL_DEFAULT)
     last = None
 
     for label, key in active:
@@ -642,8 +695,7 @@ def gemini(prompt):
                 f"v1beta/models/{model}:generateContent"
             )
 
-            system_prompt = get_setting("system_prompt", SYSTEM_PROMPT)
-            system_prompt += """
+            system_prompt = base_system_prompt + """
 
 RESPONSE AND FILE OUTPUT RULES:
 - For ordinary questions, answer normally. Never print the literal tags <FILE> or </FILE>.
@@ -671,14 +723,21 @@ RESPONSE AND FILE OUTPUT RULES:
                 }
             }
 
-            r = requests.post(
+            started_at = time.perf_counter()
+            print(f"[AI START] model={model}, key={label}", flush=True)
+            r = HTTP_SESSION.post(
                 url,
                 headers={
                     "x-goog-api-key": key,
                     "Content-Type": "application/json"
                 },
                 json=payload,
-                timeout=90
+                timeout=(10, 90)
+            )
+            elapsed = time.perf_counter() - started_at
+            print(
+                f"[AI HTTP] model={model}, key={label}, status={r.status_code}, seconds={elapsed:.2f}",
+                flush=True
             )
 
             if r.ok:
@@ -696,12 +755,17 @@ RESPONSE AND FILE OUTPUT RULES:
                 ).strip()
 
                 if answer:
+                    print(
+                        f"[AI DONE] model={model}, key={label}, seconds={time.perf_counter() - started_at:.2f}, output_chars={len(answer)}",
+                        flush=True
+                    )
                     return answer, model, label
 
             last = f"{label}: HTTP {r.status_code}"
 
         except Exception as error:
             last = f"{label}: {type(error).__name__}"
+            print(f"[AI ERROR] key={label}, error={type(error).__name__}: {error}", flush=True)
 
     raise HTTPException(
         502,
@@ -1497,6 +1561,7 @@ def add_key(req: KeyReq, u=Depends(admin)):
     )
     c.commit()
     c.close()
+    clear_ai_config_cache()
     return {"ok": True}
 
 
@@ -1518,6 +1583,7 @@ def toggle_key(key_id: int, u=Depends(admin)):
     )
     c.commit()
     c.close()
+    clear_ai_config_cache()
     return {"ok": True}
 
 
@@ -1527,6 +1593,7 @@ def remove_key(key_id: int, u=Depends(admin)):
     c.execute("DELETE FROM api_keys WHERE id=?", (key_id,))
     c.commit()
     c.close()
+    clear_ai_config_cache()
     return {"ok": True}
 
 
@@ -1581,6 +1648,7 @@ def update_setting(req: SettingReq, u=Depends(admin)):
     )
     c.commit()
     c.close()
+    clear_ai_config_cache()
     return {"ok": True}
 
 
