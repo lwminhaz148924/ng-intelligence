@@ -714,7 +714,7 @@ def gemini(prompt, history=None, progress_callback=None):
     active, model, base_system_prompt = ai_config()
 
     if not active:
-        raise HTTPException(503, "Gemini API key is not configured.")
+        raise HTTPException(503, "NG INTELLIGENCE is temporarily unavailable. Please try again shortly.")
 
     last = None
 
@@ -883,7 +883,7 @@ RESPONSE AND FILE OUTPUT RULES:
 
     raise HTTPException(
         502,
-        f"All configured Gemini keys failed. {last or ''}".strip()
+        "NG INTELLIGENCE could not complete this request. Please try again shortly."
     )
 
 
