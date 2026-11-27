@@ -614,7 +614,7 @@ function SettingsPanel({
    TYPING INDICATOR
 ========================= */
 
-function TypingIndicator() {
+function TypingIndicator({ siteLogo }) {
   return (
     <div
       className="msg assistant typingmsg"
@@ -622,7 +622,7 @@ function TypingIndicator() {
       aria-label="NG INTELLIGENCE is responding"
     >
       <div className="avatar ai-avatar">
-        N
+        {siteLogo ? <img src={siteLogo} alt="NG INTELLIGENCE" /> : 'N'}
       </div>
 
       <div className="typingbubble">
@@ -666,7 +666,9 @@ function downloadGeneratedFile(file) {
 
 function MessageBubble({
   message,
-  index
+  index,
+  userAvatar,
+  siteLogo
 }) {
   const isAI = message.role === 'assistant'
   const parsed = isAI ? parseGeneratedFiles(message.content || '') : { content: message.content || '', files: [] }
@@ -690,7 +692,9 @@ function MessageBubble({
           (isAI ? 'ai-avatar' : '')
         }
       >
-        {isAI ? 'N' : 'U'}
+        {isAI
+          ? (siteLogo ? <img src={siteLogo} alt="NG INTELLIGENCE" /> : 'N')
+          : (userAvatar ? <img src={userAvatar} alt="Your profile" /> : 'U')}
       </div>
 
       <div className="content">
@@ -754,7 +758,12 @@ function ProfilePanel({ user, onClose, onSaved }) {
 function App() {
   const [user, setUser] =
     useState(null)
+  const [siteLogo, setSiteLogo] = useState('')
   const messagesEndRef = useRef(null)
+
+  useEffect(() => {
+    api('/api/branding').then(data => setSiteLogo(data.logo_data || '')).catch(() => {})
+  }, [])
 
   const [side, setSide] =
     useState(true)
@@ -1093,12 +1102,14 @@ function App() {
                       key={`${i}-${m.role}-${m.content.slice(0, 24)}`}
                       message={m}
                       index={i}
+                      userAvatar={user?.avatar_data || ''}
+                      siteLogo={siteLogo}
                     />
                   )
                 )}
 
                 {busy && (
-                  <TypingIndicator />
+                  <TypingIndicator siteLogo={siteLogo} />
                 )}
 
                 <div
