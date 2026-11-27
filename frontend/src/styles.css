@@ -1678,3 +1678,50 @@ main { min-width: 0; flex: 1; position: relative; }
   from { opacity: 0; transform: translateY(5px); }
   to { opacity: 1; transform: translateY(0); }
 }
+
+
+/* Generated file attachments in AI responses */
+.generated-files {
+  margin-top: 16px;
+  padding: 12px;
+  border: 1px solid #dce6f1;
+  border-radius: 14px;
+  background: #f8fbff;
+  color: #172b46;
+}
+.generated-files-heading, .generated-file, .generated-file-info {
+  display: flex;
+  align-items: center;
+}
+.generated-files-heading {
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+  font-weight: 750;
+}
+.generated-files-heading span { display: inline-flex; align-items: center; gap: 8px; }
+.generated-files-heading small, .generated-file-info small { color: #6b7b90; font-size: 11px; }
+.generated-file {
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px;
+  border: 1px solid #e3eaf2;
+  border-radius: 10px;
+  background: #fff;
+}
+.generated-file + .generated-file { margin-top: 8px; }
+.generated-file-info { min-width: 0; gap: 9px; }
+.generated-file-info > svg { flex: 0 0 auto; color: #526f98; }
+.generated-file-info > div { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.generated-file-info b { overflow-wrap: anywhere; font-size: 12px; color: #203650; }
+.generated-file-download {
+  flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  border: 1px solid #cbd9eb; border-radius: 8px; padding: 8px 10px;
+  background: #eef5ff; color: #24528a; font-size: 12px; font-weight: 700; cursor: pointer;
+}
+.generated-file-download:hover { background: #e1edff; }
+@media (max-width: 600px) {
+  .generated-files { padding: 10px; }
+  .generated-file { align-items: flex-start; flex-direction: column; }
+  .generated-file-download { width: 100%; }
+}
